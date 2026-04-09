@@ -23,16 +23,15 @@ def verify_password(password: str, hashed_password: str) -> bool:
     return hmac.compare_digest(expected_key, candidate_key)
 
 
-def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
+def create_access_token(subject: str, session_id: str | None = None, expires_delta: timedelta | None = None) -> str:
     settings = get_settings()
-    expire = datetime.now(UTC) + (
-        expires_delta or timedelta(minutes=settings.access_token_expire_minutes)
-    )
+    expire = datetime.now(UTC) + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
     payload = {"sub": subject, "exp": expire}
+    if session_id:
+        payload["sid"] = session_id
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
 def decode_token(token: str) -> dict:
     settings = get_settings()
     return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
-

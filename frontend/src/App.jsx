@@ -4,8 +4,10 @@ import { api } from "./api/client";
 import HtsChart from "./HtsChart";
 import {
   ACCOUNT_STATUS_LABELS,
+  AUTH_STRENGTH_LABELS,
   CANDLE_INTERVALS,
   DEMO_USERS,
+  DEVICE_TRUST_LABELS,
   LOWER_TABS,
   MARKET_LABELS,
   ORDER_SIDE_LABELS,
@@ -16,6 +18,7 @@ import {
   RISK_SEVERITY_LABELS,
   RISK_STATUS_LABELS,
   ROLE_LABELS,
+  SESSION_STATUS_LABELS,
   TOP_TABS,
   buildInvestorFlows,
   buildOrderBook,
@@ -91,8 +94,8 @@ function getAuditSummary(log) {
     .join(" / ");
 }
 
-const ADMIN_TOP_TABS = ["실시간 관제", "사건 분석", "감사 추적", "공격 실습", "룰 현황", "시장 참조"];
-const ADMIN_TOP_TAB_CODES = ["9001", "9002", "9003", "9004", "9005", "9006"];
+const ADMIN_TOP_TABS = ["실시간 관제", "사건 분석", "세션 보안", "단말 신뢰", "보안 정책", "감사/포렌식", "공격 실습", "시장 참조"];
+const ADMIN_TOP_TAB_CODES = ["9001", "9002", "9003", "9004", "9005", "9006", "9007", "9008"];
 
 export default function App() {
   const [token, setToken] = useState(() => window.localStorage.getItem("verve-fds-token") || "");
@@ -104,8 +107,13 @@ export default function App() {
   const [riskEvents, setRiskEvents] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [ruleCatalog, setRuleCatalog] = useState([]);
+  const [securityOverview, setSecurityOverview] = useState(null);
+  const [securityDevices, setSecurityDevices] = useState([]);
+  const [securitySessions, setSecuritySessions] = useState([]);
+  const [securityPolicies, setSecurityPolicies] = useState([]);
   const [selectedRiskEventId, setSelectedRiskEventId] = useState("");
   const [selectedRiskDetail, setSelectedRiskDetail] = useState(null);
+  const [selectedIncidentTimeline, setSelectedIncidentTimeline] = useState([]);
   const [riskDetailLoading, setRiskDetailLoading] = useState(false);
   const [lastLabExecution, setLastLabExecution] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -177,10 +185,12 @@ export default function App() {
   useEffect(() => {
     if (!isAdmin || !token || !selectedRiskEventId) {
       setSelectedRiskDetail(null);
+      setSelectedIncidentTimeline([]);
       return;
     }
 
     loadRiskEventDetail(selectedRiskEventId);
+    loadRiskEventTimeline(selectedRiskEventId);
   }, [isAdmin, token, selectedRiskEventId]);
 
   useEffect(() => {
@@ -269,15 +279,37 @@ export default function App() {
       const orderList = await api.listOrders(activeToken, deviceId);
       const portfolioSnapshot = await api.getPortfolio(activeToken, deviceId);
 
-      let adminData = { riskEvents: [], auditLogs: [], labScenarios: [], ruleCatalog: [] };
+      let adminData = {
+        riskEvents: [],
+        auditLogs: [],
+        labScenarios: [],
+        ruleCatalog: [],
+        securityOverview: null,
+        securityDevices: [],
+        securitySessions: [],
+        securityPolicies: [],
+      };
       if (me.role === "ADMIN") {
-        const [eventList, logList, scenarioList, ruleList] = await Promise.all([
+        const [eventList, logList, scenarioList, ruleList, overview, deviceList, sessionList, policyList] = await Promise.all([
           api.listRiskEvents(activeToken, deviceId),
           api.listAuditLogs(activeToken, deviceId),
           api.listLabScenarios(activeToken, deviceId),
           api.listRuleCatalog(activeToken, deviceId),
+          api.getSecurityOverview(activeToken, deviceId),
+          api.listSecurityDevices(activeToken, deviceId),
+          api.listSecuritySessions(activeToken, deviceId),
+          api.listSecurityPolicies(activeToken, deviceId),
         ]);
-        adminData = { riskEvents: eventList, auditLogs: logList, labScenarios: scenarioList, ruleCatalog: ruleList };
+        adminData = {
+          riskEvents: eventList,
+          auditLogs: logList,
+          labScenarios: scenarioList,
+          ruleCatalog: ruleList,
+          securityOverview: overview,
+          securityDevices: deviceList,
+          securitySessions: sessionList,
+          securityPolicies: policyList,
+        };
       }
 
       startTransition(() => {
@@ -289,6 +321,10 @@ export default function App() {
         setAuditLogs(adminData.auditLogs);
         setLabScenarios(adminData.labScenarios || []);
         setRuleCatalog(adminData.ruleCatalog || []);
+        setSecurityOverview(adminData.securityOverview || null);
+        setSecurityDevices(adminData.securityDevices || []);
+        setSecuritySessions(adminData.securitySessions || []);
+        setSecurityPolicies(adminData.securityPolicies || []);
         setOrderForm((current) => ({
           ...current,
           account_id: current.account_id || portfolioSnapshot.account?.id || "",
@@ -377,6 +413,20 @@ export default function App() {
     }
   }
 
+  async function loadRiskEventTimeline(riskEventId) {
+    if (!riskEventId) {
+      setSelectedIncidentTimeline([]);
+      return;
+    }
+
+    try {
+      const timeline = await api.getRiskEventTimeline(token, riskEventId, deviceId);
+      setSelectedIncidentTimeline(timeline);
+    } catch (timelineError) {
+      setError(localizeMessage(timelineError.message));
+    }
+  }
+
   async function handleLogin(event) {
     event.preventDefault();
     setLoading(true);
@@ -406,9 +456,14 @@ export default function App() {
       setRiskEvents([]);
       setAuditLogs([]);
       setRuleCatalog([]);
+      setSecurityOverview(null);
+      setSecurityDevices([]);
+      setSecuritySessions([]);
+      setSecurityPolicies([]);
       setLabScenarios([]);
       setSelectedRiskEventId("");
       setSelectedRiskDetail(null);
+      setSelectedIncidentTimeline([]);
       setLastLabExecution(null);
     }
   }
@@ -488,6 +543,52 @@ export default function App() {
       setError(localizeMessage(scenarioError.message));
     } finally {
       setScenarioLoadingCode("");
+    }
+  }
+
+  async function handleDeviceAction(securityDeviceId, actionType) {
+    setLoading(true);
+    setError("");
+
+    try {
+      await api.applySecurityDeviceAction(
+        token,
+        securityDeviceId,
+        {
+          action_type: actionType,
+          comment:
+            actionType === "TRUST"
+              ? "관리자 신뢰 단말 승인"
+              : actionType === "BLOCK"
+                ? "관리자 단말 차단"
+                : "관리자 단계인증 유지",
+        },
+        deviceId,
+      );
+      await refreshDashboard(token);
+    } catch (deviceError) {
+      setError(localizeMessage(deviceError.message));
+      setLoading(false);
+    }
+  }
+
+  async function handleSessionRevoke(authSessionId) {
+    setLoading(true);
+    setError("");
+
+    try {
+      await api.revokeSecuritySession(
+        token,
+        authSessionId,
+        {
+          reason: "관리자 세션 회수",
+        },
+        deviceId,
+      );
+      await refreshDashboard(token);
+    } catch (sessionError) {
+      setError(localizeMessage(sessionError.message));
+      setLoading(false);
     }
   }
 
@@ -752,8 +853,41 @@ export default function App() {
       ]
     : [];
   const responseGuideRows = selectedRiskHits.slice(0, 4);
+  const securityKpiCards = [
+    {
+      label: "활성 세션",
+      value: `${securityOverview?.active_sessions || 0}건`,
+      note: `고위험 ${securityOverview?.step_up_sessions || 0}건`,
+      className: securityOverview?.step_up_sessions ? "is-down" : "",
+    },
+    {
+      label: "신뢰 단말",
+      value: `${securityOverview?.trusted_devices || 0}건`,
+      note: `차단 ${securityOverview?.blocked_devices || 0}건`,
+      className: securityOverview?.blocked_devices ? "is-down" : "",
+    },
+    {
+      label: "추가 인증",
+      value: `${securityOverview?.pending_additional_auth || 0}건`,
+      note: `사건 ${securityOverview?.auth_required_events || 0}건`,
+      className: securityOverview?.pending_additional_auth ? "is-flat" : "",
+    },
+    {
+      label: "동시 세션 사용자",
+      value: `${securityOverview?.concurrent_session_users || 0}명`,
+      note: `이상 로그인 ${securityOverview?.anomalous_logins_24h || 0}건`,
+      className: securityOverview?.concurrent_session_users ? "is-down" : "",
+    },
+  ];
+  const highRiskSessionRows = [...securitySessions]
+    .sort((left, right) => right.risk_score - left.risk_score)
+    .slice(0, 8);
+  const devicePostureRows = [...securityDevices]
+    .sort((left, right) => right.risk_score - left.risk_score)
+    .slice(0, 8);
+  const incidentTimelineRows = selectedIncidentTimeline.slice(0, 20);
   const toolbarNote = isAdmin
-    ? "관제 큐/감사로그 7초 자동 갱신 / 사건 선택 후 즉시 조치 / F5 새로고침"
+    ? "관제 큐·세션·단말 7초 자동 갱신 / 사건 선택 후 조치 / F5 새로고침"
     : "공개 시세 API 기준, 7초 자동 갱신 / F5 새로고침 / Alt+1~4 탭 / Alt+B,S 매매";
   const displayTopTabs = isAdmin ? ADMIN_TOP_TABS : TOP_TABS;
   const displayTopTabCodes = isAdmin ? ADMIN_TOP_TAB_CODES : ["0101", "0110", "0120", "0301", "0130", "0140"];
@@ -875,6 +1009,247 @@ export default function App() {
       return (
         <div className="tab-view-stack">
           <section className="hts-panel">
+            <div className="panel-title">세션 보안 현황</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>사용자</th>
+                    <th>단말</th>
+                    <th>인증강도</th>
+                    <th>상태</th>
+                    <th>위험점수</th>
+                    <th>조치</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {highRiskSessionRows.length ? (
+                    highRiskSessionRows.map((session) => (
+                      <tr key={session.id}>
+                        <td>{session.user_email}</td>
+                        <td>{session.device_label}</td>
+                        <td>{AUTH_STRENGTH_LABELS[session.auth_strength] || session.auth_strength}</td>
+                        <td>{SESSION_STATUS_LABELS[session.status] || session.status}</td>
+                        <td className={getSignedClass(session.risk_score)}>{session.risk_score}</td>
+                        <td>
+                          {session.status === "ACTIVE" ? (
+                            <button type="button" className="table-action-button" onClick={() => handleSessionRevoke(session.id)}>
+                              회수
+                            </button>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="6">표시할 세션 정보가 없습니다.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="hts-panel">
+            <div className="panel-title">세션 KPI</div>
+            <div className="panel-body">
+              <div className="summary-strip">
+                {securityKpiCards.map((card) => (
+                  <article key={card.label} className="summary-card">
+                    <span>{card.label}</span>
+                    <strong className={card.className}>{card.value}</strong>
+                    <small>{card.note}</small>
+                  </article>
+                ))}
+              </div>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    if (activeTopTab === 3) {
+      return (
+        <div className="tab-view-stack">
+          <section className="hts-panel">
+            <div className="panel-title">신뢰 단말 콘솔</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>사용자</th>
+                    <th>단말ID</th>
+                    <th>신뢰도</th>
+                    <th>위험</th>
+                    <th>지역</th>
+                    <th>세션</th>
+                    <th>조치</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {devicePostureRows.length ? (
+                    devicePostureRows.map((device) => (
+                      <tr key={device.id}>
+                        <td>{device.user_email}</td>
+                        <td>{device.display_name}</td>
+                        <td>{DEVICE_TRUST_LABELS[device.trust_status] || device.trust_status}</td>
+                        <td className={getSignedClass(device.risk_score)}>{device.risk_score}</td>
+                        <td>{REGION_LABELS[device.last_region] || device.last_region}</td>
+                        <td>{device.active_session_count}</td>
+                        <td className="table-action-cell">
+                          <button type="button" className="table-action-button" onClick={() => handleDeviceAction(device.id, "TRUST")}>
+                            신뢰
+                          </button>
+                          <button type="button" className="table-action-button" onClick={() => handleDeviceAction(device.id, "STEP_UP")}>
+                            재인증
+                          </button>
+                          <button type="button" className="table-action-button danger" onClick={() => handleDeviceAction(device.id, "BLOCK")}>
+                            차단
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="7">표시할 단말 정보가 없습니다.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="hts-panel">
+            <div className="panel-title">단말 위험 분포</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>단말</th>
+                    <th>접속 IP</th>
+                    <th>User-Agent</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {devicePostureRows.slice(0, 5).map((device) => (
+                    <tr key={`meta-${device.id}`}>
+                      <td>{device.device_id}</td>
+                      <td>{device.last_ip_address}</td>
+                      <td>{device.last_user_agent || "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    if (activeTopTab === 4) {
+      return (
+        <div className="tab-view-stack">
+          <section className="hts-panel">
+            <div className="panel-title">보안 정책 카탈로그</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>코드</th>
+                    <th>정책명</th>
+                    <th>레이어</th>
+                    <th>모드</th>
+                    <th>기준</th>
+                    <th>설명</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {securityPolicies.map((policy) => (
+                    <tr key={policy.policy_code}>
+                      <td>{policy.policy_code}</td>
+                      <td>{policy.title}</td>
+                      <td>{policy.layer}</td>
+                      <td>{policy.mode}</td>
+                      <td>{policy.threshold}</td>
+                      <td>{policy.description}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="hts-panel">
+            <div className="panel-title">FDS 룰 카탈로그</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>룰 코드</th>
+                    <th>룰명</th>
+                    <th>점수</th>
+                    <th>심각도</th>
+                    <th>설명</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ruleCatalog.map((rule) => (
+                    <tr key={rule.rule_code}>
+                      <td>{rule.rule_code}</td>
+                      <td>{rule.rule_name}</td>
+                      <td>{rule.score}</td>
+                      <td>{RISK_SEVERITY_LABELS[rule.severity] || rule.severity}</td>
+                      <td>{rule.description}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    if (activeTopTab === 5) {
+      return (
+        <div className="tab-view-stack">
+          <section className="hts-panel">
+            <div className="panel-title">사건 타임라인</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>시간</th>
+                    <th>분류</th>
+                    <th>심각도</th>
+                    <th>제목</th>
+                    <th>세부</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {incidentTimelineRows.length ? (
+                    incidentTimelineRows.map((entry, index) => (
+                      <tr key={`${entry.source_type}-${entry.source_id || index}`}>
+                        <td>{formatTime(entry.timestamp)}</td>
+                        <td>{entry.category}</td>
+                        <td>{entry.severity}</td>
+                        <td>{entry.title}</td>
+                        <td>{entry.detail}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="5">선택된 사건의 타임라인이 없습니다.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="hts-panel">
             <div className="panel-title">감사 추적</div>
             <div className="panel-body compact">
               <table className="hts-table">
@@ -905,7 +1280,7 @@ export default function App() {
       );
     }
 
-    if (activeTopTab === 3) {
+    if (activeTopTab === 6) {
       return (
         <div className="tab-view-stack">
           <section className="hts-panel">
@@ -964,39 +1339,7 @@ export default function App() {
       );
     }
 
-    if (activeTopTab === 4) {
-      return (
-        <section className="hts-panel">
-          <div className="panel-title">FDS 룰 카탈로그</div>
-          <div className="panel-body compact">
-            <table className="hts-table">
-              <thead>
-                <tr>
-                  <th>룰 코드</th>
-                  <th>룰명</th>
-                  <th>점수</th>
-                  <th>심각도</th>
-                  <th>설명</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ruleCatalog.map((rule) => (
-                  <tr key={rule.rule_code}>
-                    <td>{rule.rule_code}</td>
-                    <td>{rule.rule_name}</td>
-                    <td>{rule.score}</td>
-                    <td>{RISK_SEVERITY_LABELS[rule.severity] || rule.severity}</td>
-                    <td>{rule.description}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      );
-    }
-
-    if (activeTopTab === 5) {
+    if (activeTopTab === 7) {
       return (
         <div className="tab-view-stack">
           <section className="hts-panel">
@@ -1811,6 +2154,14 @@ export default function App() {
                             <tr>
                               <th>감사 로그</th>
                               <td>{auditLogs.length}건</td>
+                            </tr>
+                            <tr>
+                              <th>활성 세션</th>
+                              <td>{securityOverview?.active_sessions || 0}건</td>
+                            </tr>
+                            <tr>
+                              <th>차단 단말</th>
+                              <td>{securityOverview?.blocked_devices || 0}건</td>
                             </tr>
                             <tr>
                               <th>실습 시나리오</th>

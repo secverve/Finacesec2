@@ -1,15 +1,18 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.enums import UserRole, UserStatus
+from app.core.config import get_settings
+from app.core.enums import DeviceTrustStatus, SessionStatus, UserRole, UserStatus
 from app.core.security import create_access_token, hash_password, verify_password
 from app.fds.types import RequestContext
 from app.models.account import Account
+from app.models.auth_session import AuthSession
 from app.models.device_history import DeviceHistory
 from app.models.login_history import LoginHistory
 from app.models.user import User
 from app.models.user_behavior_profile import UserBehaviorProfile
 from app.services.audit_service import record_audit
+from app.services.security_service import create_authenticated_session, revoke_session, upsert_security_device
 
 
 def generate_account_number(seed: int) -> str:
@@ -86,13 +89,7 @@ def register_user(db: Session, email: str, full_name: str, password: str, contex
     return user
 
 
-def authenticate_user(
-    db: Session,
-    email: str,
-    password: str,
-    context: RequestContext,
-) -> str:
-    user = get_user_by_email(db, email)
+def _record_failed_login(db: Session, user: User | None, email: str, context: RequestContext, reason: str) -> None:
     login_history = LoginHistory(
         user_id=user.id if user else None,
         email=email.lower(),
@@ -100,42 +97,55 @@ def authenticate_user(
         region=context.region,
         device_id=context.device_id,
         success=False,
-        failure_reason="INVALID_CREDENTIALS",
+        failure_reason=reason,
     )
+    db.add(login_history)
+    record_audit(
+        db,
+        actor_user_id=user.id if user else None,
+        event_type="LOGIN_FAILED" if reason != "ACCOUNT_LOCKED" else "LOGIN_BLOCKED",
+        target_type="USER",
+        target_id=user.id if user else None,
+        context=context,
+        payload={"email": email.lower(), "reason": reason},
+    )
+
+
+def authenticate_user(
+    db: Session,
+    email: str,
+    password: str,
+    context: RequestContext,
+) -> str:
+    settings = get_settings()
+    user = get_user_by_email(db, email)
 
     if user is None or not verify_password(password, user.password_hash):
         if user and user.behavior_profile:
             user.behavior_profile.recent_login_failures += 1
-        db.add(login_history)
-        record_audit(
-            db,
-            actor_user_id=user.id if user else None,
-            event_type="LOGIN_FAILED",
-            target_type="USER",
-            target_id=user.id if user else None,
-            context=context,
-            payload={"email": email.lower()},
-        )
+            if user.behavior_profile.recent_login_failures >= settings.login_failure_lock_threshold:
+                user.status = UserStatus.LOCKED
+                _record_failed_login(db, user, email, context, "ACCOUNT_LOCKED")
+                db.flush()
+                raise PermissionError("Account is locked")
+        _record_failed_login(db, user, email, context, "INVALID_CREDENTIALS")
         db.flush()
         raise ValueError("Invalid credentials")
 
     if user.status == UserStatus.LOCKED:
-        login_history.failure_reason = "ACCOUNT_LOCKED"
-        db.add(login_history)
-        record_audit(
-            db,
-            actor_user_id=user.id,
-            event_type="LOGIN_BLOCKED",
-            target_type="USER",
-            target_id=user.id,
-            context=context,
-            payload={"reason": "ACCOUNT_LOCKED"},
-        )
+        _record_failed_login(db, user, email, context, "ACCOUNT_LOCKED")
         db.flush()
         raise PermissionError("Account is locked")
 
-    login_history.success = True
-    login_history.failure_reason = None
+    login_history = LoginHistory(
+        user_id=user.id,
+        email=email.lower(),
+        ip_address=context.ip_address,
+        region=context.region,
+        device_id=context.device_id,
+        success=True,
+        failure_reason=None,
+    )
     db.add(login_history)
 
     if user.behavior_profile:
@@ -162,6 +172,13 @@ def authenticate_user(
         existing_device.ip_address = context.ip_address
         existing_device.region = context.region
 
+    security_device = upsert_security_device(db, user, context)
+    if security_device.trust_status == DeviceTrustStatus.BLOCKED:
+        _record_failed_login(db, user, email, context, "BLOCKED_DEVICE")
+        db.flush()
+        raise PermissionError("Blocked device")
+
+    auth_session = create_authenticated_session(db, user, security_device, context)
     record_audit(
         db,
         actor_user_id=user.id,
@@ -169,21 +186,31 @@ def authenticate_user(
         target_type="USER",
         target_id=user.id,
         context=context,
-        payload={"email": user.email},
+        payload={
+            "email": user.email,
+            "session_id": auth_session.id,
+            "device_trust_status": security_device.trust_status.value,
+            "session_auth_strength": auth_session.auth_strength.value,
+            "session_risk_score": auth_session.risk_score,
+        },
     )
     db.flush()
-    return create_access_token(user.id)
+    return create_access_token(user.id, auth_session.id)
 
 
-def logout_user(db: Session, user: User, context: RequestContext) -> None:
+def logout_user(db: Session, user: User, context: RequestContext, current_session: AuthSession | None = None) -> None:
+    if current_session is not None and current_session.user_id == user.id and current_session.status == SessionStatus.ACTIVE:
+        revoke_session(current_session, "USER_LOGOUT")
     record_audit(
-        db,
+        db=db,
         actor_user_id=user.id,
         event_type="LOGOUT",
         target_type="USER",
         target_id=user.id,
         context=context,
-        payload={"email": user.email},
+        payload={
+            "email": user.email,
+            "session_id": current_session.id if current_session else None,
+        },
     )
     db.flush()
-

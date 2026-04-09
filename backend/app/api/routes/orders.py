@@ -3,10 +3,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_current_user, get_request_context
+from app.api.dependencies import get_current_session, get_current_user, get_request_context
 from app.core.enums import RiskDecision, RiskSeverity
 from app.db.session import get_db
 from app.fds.types import RequestContext
+from app.models.auth_session import AuthSession
 from app.models.order import Order
 from app.models.user import User
 from app.schemas.order import OrderCreateRequest, OrderResponse
@@ -58,8 +59,9 @@ def submit_order(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     request_context: Annotated[RequestContext, Depends(get_request_context)],
+    current_session: Annotated[AuthSession | None, Depends(get_current_session)],
 ) -> OrderResponse:
-    order = create_order(db, current_user, payload, request_context)
+    order = create_order(db, current_user, payload, request_context, current_session=current_session)
     db.commit()
     db.refresh(order)
     return serialize_order(order)

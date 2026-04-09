@@ -18,7 +18,8 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     orders = relationship("Order", back_populates="user")
     logins = relationship("LoginHistory", back_populates="user")
     devices = relationship("DeviceHistory", back_populates="user")
+    security_devices = relationship("SecurityDevice", back_populates="user")
+    auth_sessions = relationship("AuthSession", back_populates="user")
     risk_events = relationship("RiskEvent", back_populates="user")
     admin_actions = relationship("AdminAction", back_populates="admin_user")
     behavior_profile = relationship("UserBehaviorProfile", back_populates="user", uselist=False)
-

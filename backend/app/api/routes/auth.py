@@ -3,9 +3,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_current_user, get_request_context
+from app.api.dependencies import get_current_session, get_current_user, get_request_context
 from app.db.session import get_db
 from app.fds.types import RequestContext
+from app.models.auth_session import AuthSession
 from app.models.user import User
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserProfileResponse
 from app.schemas.common import MessageResponse
@@ -64,8 +65,9 @@ def logout(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
     request_context: Annotated[RequestContext, Depends(get_request_context)],
+    current_session: Annotated[AuthSession | None, Depends(get_current_session)],
 ) -> MessageResponse:
-    logout_user(db=db, user=current_user, context=request_context)
+    logout_user(db=db, user=current_user, context=request_context, current_session=current_session)
     db.commit()
     return MessageResponse(message="Logged out")
 
@@ -73,4 +75,3 @@ def logout(
 @router.get("/me", response_model=UserProfileResponse)
 def me(current_user: Annotated[User, Depends(get_current_user)]) -> User:
     return current_user
-

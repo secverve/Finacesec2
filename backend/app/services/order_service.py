@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.enums import OrderStatus, OrderType, RiskDecision
 from app.fds.types import RequestContext
 from app.models.account import Account
+from app.models.auth_session import AuthSession
 from app.models.order import Order
 from app.models.stock import Stock
 from app.models.user import User
@@ -12,6 +13,7 @@ from app.schemas.order import OrderCreateRequest
 from app.services.audit_service import record_audit
 from app.services.market_data import market_data_provider
 from app.services.risk_service import evaluate_and_persist_order_risk
+from app.services.security_service import enforce_order_security_controls
 from app.services.trading_service import execute_order_if_possible
 
 
@@ -50,7 +52,13 @@ def _record_execution_audit(db: Session, user: User, order: Order, stock: Stock,
     )
 
 
-def create_order(db: Session, user: User, payload: OrderCreateRequest, context: RequestContext) -> Order:
+def create_order(
+    db: Session,
+    user: User,
+    payload: OrderCreateRequest,
+    context: RequestContext,
+    current_session: AuthSession | None = None,
+) -> Order:
     account = _get_user_account(db, user, payload.account_id)
     stock = _get_stock(db, payload.symbol)
 
@@ -75,9 +83,10 @@ def create_order(db: Session, user: User, payload: OrderCreateRequest, context: 
     db.flush()
 
     risk_event, evaluation = evaluate_and_persist_order_risk(db, user, stock, order, context)
-    if evaluation.decision == RiskDecision.BLOCKED:
+    enforce_order_security_controls(db, user, stock, order, risk_event, current_session, context)
+    if risk_event.decision == RiskDecision.BLOCKED:
         order.status = OrderStatus.BLOCKED
-    elif evaluation.decision == RiskDecision.HELD:
+    elif risk_event.decision in {RiskDecision.HELD, RiskDecision.AUTH_REQUIRED}:
         order.status = OrderStatus.HELD
     else:
         execute_order_if_possible(db, order, stock, account, execution_source="order_submit")
@@ -94,9 +103,11 @@ def create_order(db: Session, user: User, payload: OrderCreateRequest, context: 
             "quantity": order.quantity,
             "status": order.status.value,
             "risk_event_id": risk_event.id,
-            "risk_score": evaluation.total_score,
+            "risk_score": risk_event.total_score,
+            "risk_decision": risk_event.decision.value,
             "order_type": order.order_type.value,
             "side": order.side.value,
+            "session_id": current_session.id if current_session else None,
         },
     )
     _record_execution_audit(db, user, order, stock, context)

@@ -10,6 +10,11 @@ It includes:
 - React frontend for login, trading, portfolio, and admin review
 - Seed data, Docker support, and API tests
 
+## Documentation
+
+- [FEATURES.md](FEATURES.md): 기능 설명서
+- [SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md): 보안 아키텍처 설명서
+
 ## Directory Layout
 
 ```text

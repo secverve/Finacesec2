@@ -33,10 +33,13 @@ class Settings(BaseSettings):
     abnormal_region_codes: list[str] = Field(default_factory=lambda: ["CN", "RU", "KP"])
     multi_account_window_minutes: int = 10
     login_failure_window_minutes: int = 30
+    login_failure_lock_threshold: int = 5
     order_spike_multiplier: float = 3.0
     order_cancel_burst_threshold: int = 3
     order_cancel_window_minutes: int = 15
     immediate_order_window_minutes: int = 10
+    session_concurrency_threshold: int = 2
+    high_value_step_up_threshold: int = 2_000_000
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,

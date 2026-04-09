@@ -11,6 +11,26 @@ class UserStatus(str, Enum):
     LOCKED = "LOCKED"
 
 
+class DeviceTrustStatus(str, Enum):
+    TRUSTED = "TRUSTED"
+    WATCH = "WATCH"
+    STEP_UP_REQUIRED = "STEP_UP_REQUIRED"
+    BLOCKED = "BLOCKED"
+
+
+class SessionStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    REVOKED = "REVOKED"
+    EXPIRED = "EXPIRED"
+
+
+class AuthStrength(str, Enum):
+    PASSWORD_ONLY = "PASSWORD_ONLY"
+    PASSWORD_PLUS_DEVICE = "PASSWORD_PLUS_DEVICE"
+    STEP_UP_REQUIRED = "STEP_UP_REQUIRED"
+    ADMIN_APPROVED = "ADMIN_APPROVED"
+
+
 class OrderSide(str, Enum):
     BUY = "BUY"
     SELL = "SELL"
@@ -62,8 +82,13 @@ class AdminActionType(str, Enum):
     UNLOCK_ACCOUNT = "UNLOCK_ACCOUNT"
 
 
+class DeviceActionType(str, Enum):
+    TRUST = "TRUST"
+    STEP_UP = "STEP_UP"
+    BLOCK = "BLOCK"
+
+
 class AdditionalAuthStatus(str, Enum):
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"
     REJECTED = "REJECTED"
-

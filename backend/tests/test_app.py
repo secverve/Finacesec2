@@ -121,6 +121,7 @@ def test_admin_can_approve_blocked_risk_event(client: TestClient) -> None:
     trader_token = login(client, "trader@verve.local", "Trader1234!", device_id="baseline-device")
     portfolio_response = client.get("/api/v1/portfolio/me", headers=build_headers(trader_token, "baseline-device"))
     account_id = portfolio_response.json()["account"]["id"]
+    suspicious_token = login(client, "trader@verve.local", "Trader1234!", device_id="suspicious-device", region="CN")
 
     blocked_order_response = client.post(
         "/api/v1/orders",
@@ -132,7 +133,7 @@ def test_admin_can_approve_blocked_risk_event(client: TestClient) -> None:
             "quantity": 3,
             "price": None,
         },
-        headers=build_headers(trader_token, "suspicious-device", "CN"),
+        headers=build_headers(suspicious_token, "suspicious-device", "CN"),
     )
 
     assert blocked_order_response.status_code == 201, blocked_order_response.text
@@ -189,3 +190,46 @@ def test_admin_can_view_rule_catalog(client: TestClient) -> None:
     payload = response.json()
     assert payload
     assert {"rule_code", "rule_name", "description", "score", "severity"} <= set(payload[0].keys())
+
+
+def test_high_value_order_requires_step_up_on_untrusted_device(client: TestClient) -> None:
+    token = login(client, "trader@verve.local", "Trader1234!", device_id="fresh-device")
+    portfolio_response = client.get("/api/v1/portfolio/me", headers=build_headers(token, "fresh-device"))
+    account_id = portfolio_response.json()["account"]["id"]
+
+    order_response = client.post(
+        "/api/v1/orders",
+        json={
+            "account_id": account_id,
+            "symbol": "000660",
+            "side": "BUY",
+            "order_type": "MARKET",
+            "quantity": 11,
+            "price": None,
+        },
+        headers=build_headers(token, "fresh-device"),
+    )
+
+    assert order_response.status_code == 201, order_response.text
+    payload = order_response.json()
+    assert payload["status"] == "HELD"
+    assert payload["risk_decision"] == "AUTH_REQUIRED"
+
+
+def test_admin_can_view_and_revoke_security_session(client: TestClient) -> None:
+    trader_token = login(client, "trader@verve.local", "Trader1234!", device_id="session-device")
+    admin_token = login(client, "admin@verve.local", "Admin1234!", device_id="session-admin")
+
+    sessions_response = client.get("/api/v1/admin/security/sessions", headers=build_headers(admin_token, "session-admin"))
+    assert sessions_response.status_code == 200, sessions_response.text
+    target_session = next(session for session in sessions_response.json() if session["device_id"] == "session-device")
+
+    revoke_response = client.post(
+        f"/api/v1/admin/security/sessions/{target_session['id']}/revoke",
+        json={"reason": "Analyst revoked suspicious session"},
+        headers=build_headers(admin_token, "session-admin"),
+    )
+    assert revoke_response.status_code == 200, revoke_response.text
+
+    denied_response = client.get("/api/v1/portfolio/me", headers=build_headers(trader_token, "session-device"))
+    assert denied_response.status_code == 401

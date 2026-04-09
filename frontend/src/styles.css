@@ -868,6 +868,26 @@ button {
   background: #dce8fa;
 }
 
+.table-action-cell {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.table-action-button {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  border: 1px solid #8d95a1;
+  background: linear-gradient(180deg, #ffffff, #dbe1e8);
+}
+
+.table-action-button.danger {
+  border-color: #b65e5e;
+  color: #8f1d1d;
+  background: linear-gradient(180deg, #fff3f3, #f1d6d6);
+}
+
 .audit-summary-cell {
   color: #465364;
 }

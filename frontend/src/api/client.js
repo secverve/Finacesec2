@@ -65,11 +65,42 @@ export const api = {
   getRiskEventDetail(token, riskEventId, deviceId) {
     return request(`/admin/risk-events/${riskEventId}`, { token, deviceId });
   },
+  getRiskEventTimeline(token, riskEventId, deviceId) {
+    return request(`/admin/risk-events/${riskEventId}/timeline`, { token, deviceId });
+  },
   listAuditLogs(token, deviceId) {
     return request("/admin/audit-logs", { token, deviceId });
   },
   listRuleCatalog(token, deviceId) {
     return request("/admin/rules", { token, deviceId });
+  },
+  getSecurityOverview(token, deviceId) {
+    return request("/admin/security/overview", { token, deviceId });
+  },
+  listSecurityDevices(token, deviceId) {
+    return request("/admin/security/devices", { token, deviceId });
+  },
+  applySecurityDeviceAction(token, securityDeviceId, body, deviceId) {
+    return request(`/admin/security/devices/${securityDeviceId}/actions`, {
+      method: "POST",
+      token,
+      body,
+      deviceId,
+    });
+  },
+  listSecuritySessions(token, deviceId) {
+    return request("/admin/security/sessions", { token, deviceId });
+  },
+  revokeSecuritySession(token, authSessionId, body, deviceId) {
+    return request(`/admin/security/sessions/${authSessionId}/revoke`, {
+      method: "POST",
+      token,
+      body,
+      deviceId,
+    });
+  },
+  listSecurityPolicies(token, deviceId) {
+    return request("/admin/security/policies", { token, deviceId });
   },
   applyAdminAction(token, riskEventId, body, deviceId) {
     return request(`/admin/risk-events/${riskEventId}/actions`, {

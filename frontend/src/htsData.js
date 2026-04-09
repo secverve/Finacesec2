@@ -58,6 +58,26 @@ export const ACCOUNT_STATUS_LABELS = {
   LOCKED: "잠김",
 };
 
+export const DEVICE_TRUST_LABELS = {
+  TRUSTED: "신뢰",
+  WATCH: "관찰",
+  STEP_UP_REQUIRED: "추가인증",
+  BLOCKED: "차단",
+};
+
+export const SESSION_STATUS_LABELS = {
+  ACTIVE: "활성",
+  REVOKED: "회수",
+  EXPIRED: "만료",
+};
+
+export const AUTH_STRENGTH_LABELS = {
+  PASSWORD_ONLY: "비밀번호",
+  PASSWORD_PLUS_DEVICE: "단말결합",
+  STEP_UP_REQUIRED: "재인증필요",
+  ADMIN_APPROVED: "관리자승인",
+};
+
 export const MARKET_LABELS = {
   ALL: "통합",
   KOSPI: "KRX",

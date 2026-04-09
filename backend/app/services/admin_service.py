@@ -4,17 +4,28 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.core.enums import AdditionalAuthStatus, AdminActionType, OrderStatus, RiskDecision, RiskEventStatus, UserStatus
+from app.core.enums import AdditionalAuthStatus, AdminActionType, OrderStatus, RiskDecision, RiskEventStatus, SessionStatus, UserStatus
 from app.fds.rules import build_rule_catalog
 from app.fds.types import RequestContext
 from app.models.additional_auth_request import AdditionalAuthRequest
 from app.models.admin_action import AdminAction
 from app.models.audit_log import AuditLog
+from app.models.auth_session import AuthSession
 from app.models.order import Order
 from app.models.risk_event import RiskEvent
 from app.models.user import User
 from app.schemas.admin import AdminActionRequest
 from app.services.audit_service import record_audit
+from app.services.security_service import (
+    apply_device_action,
+    build_incident_timeline,
+    build_security_policy_catalog,
+    get_security_overview,
+    list_auth_sessions,
+    list_security_devices,
+    revoke_auth_session,
+    revoke_session,
+)
 from app.services.trading_service import execute_order_if_possible
 
 
@@ -60,11 +71,32 @@ def list_rule_catalog() -> list[dict]:
     ]
 
 
+def list_security_policy_catalog() -> list[dict]:
+    return build_security_policy_catalog()
+
+
+def list_security_devices_view(db: Session) -> list[dict]:
+    return list_security_devices(db)
+
+
+def list_auth_sessions_view(db: Session) -> list[dict]:
+    return list_auth_sessions(db)
+
+
+def get_security_overview_view(db: Session) -> dict:
+    return get_security_overview(db)
+
+
 def _get_risk_event_or_404(db: Session, risk_event_id: str) -> RiskEvent:
     risk_event = get_risk_event_detail(db, risk_event_id)
     if risk_event is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Risk event not found")
     return risk_event
+
+
+def get_incident_timeline(db: Session, risk_event_id: str) -> list[dict]:
+    risk_event = _get_risk_event_or_404(db, risk_event_id)
+    return build_incident_timeline(db, risk_event)
 
 
 def apply_admin_action(
@@ -121,6 +153,16 @@ def apply_admin_action(
         risk_event.status = RiskEventStatus.BLOCKED
         if order is not None:
             order.status = OrderStatus.BLOCKED
+        active_sessions = list(
+            db.scalars(
+                select(AuthSession).where(
+                    AuthSession.user_id == risk_event.user_id,
+                    AuthSession.status == SessionStatus.ACTIVE,
+                )
+            ).all()
+        )
+        for session in active_sessions:
+            revoke_session(session, "ACCOUNT_LOCKED_BY_ADMIN")
     elif payload.action_type == AdminActionType.UNLOCK_ACCOUNT:
         risk_event.user.status = UserStatus.ACTIVE
     else:
@@ -144,3 +186,19 @@ def apply_admin_action(
     )
     db.flush()
     return action
+
+
+__all__ = [
+    "apply_admin_action",
+    "apply_device_action",
+    "get_incident_timeline",
+    "get_risk_event_detail",
+    "get_security_overview_view",
+    "list_audit_logs",
+    "list_auth_sessions_view",
+    "list_risk_events",
+    "list_rule_catalog",
+    "list_security_devices_view",
+    "list_security_policy_catalog",
+    "revoke_auth_session",
+]

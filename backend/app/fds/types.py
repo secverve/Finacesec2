@@ -19,6 +19,7 @@ class RequestContext:
     device_id: str
     request_id: str = "n/a"
     channel: str = "web"
+    user_agent: str = ""
 
 
 @dataclass(slots=True)

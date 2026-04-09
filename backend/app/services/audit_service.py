@@ -54,6 +54,7 @@ def _normalize_payload(
             "region": context.region,
             "device_id": context.device_id,
             "channel": context.channel,
+            "user_agent": context.user_agent,
         },
         "indicators": _build_indicators(payload),
         "data": payload,
