@@ -179,3 +179,13 @@ def test_admin_can_execute_lab_scenario(client: TestClient) -> None:
     payload = response.json()
     assert payload["scenario_code"] == "watchlist_high_value"
     assert payload["created_order_ids"]
+
+
+def test_admin_can_view_rule_catalog(client: TestClient) -> None:
+    admin_token = login(client, "admin@verve.local", "Admin1234!", device_id="rule-admin")
+    response = client.get("/api/v1/admin/rules", headers=build_headers(admin_token, "rule-admin"))
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload
+    assert {"rule_code", "rule_name", "description", "score", "severity"} <= set(payload[0].keys())

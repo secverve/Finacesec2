@@ -34,3 +34,11 @@ class AdminActionResponse(BaseModel):
     action_type: AdminActionType
     comment: str
     created_at: datetime
+
+
+class RuleCatalogResponse(BaseModel):
+    rule_code: str
+    rule_name: str
+    description: str
+    score: int
+    severity: str

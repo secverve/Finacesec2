@@ -7,10 +7,16 @@ from app.api.dependencies import get_admin_user, get_request_context
 from app.db.session import get_db
 from app.fds.types import RequestContext
 from app.models.user import User
-from app.schemas.admin import AdminActionRequest, AdminActionResponse, AuditLogResponse
+from app.schemas.admin import AdminActionRequest, AdminActionResponse, AuditLogResponse, RuleCatalogResponse
 from app.schemas.lab import LabScenarioExecutionResponse, LabScenarioResponse
 from app.schemas.risk_event import RiskEventDetailResponse, RiskEventResponse
-from app.services.admin_service import apply_admin_action, get_risk_event_detail, list_audit_logs, list_risk_events
+from app.services.admin_service import (
+    apply_admin_action,
+    get_risk_event_detail,
+    list_audit_logs,
+    list_risk_events,
+    list_rule_catalog,
+)
 from app.services.lab_service import execute_lab_scenario, list_lab_scenarios
 
 router = APIRouter()
@@ -58,6 +64,14 @@ def audit_logs(
 ) -> list:
     del admin_user
     return list_audit_logs(db)
+
+
+@router.get("/rules", response_model=list[RuleCatalogResponse])
+def rule_catalog(
+    admin_user: Annotated[User, Depends(get_admin_user)],
+) -> list:
+    del admin_user
+    return list_rule_catalog()
 
 
 @router.get("/lab/scenarios", response_model=list[LabScenarioResponse])

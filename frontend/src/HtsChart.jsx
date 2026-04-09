@@ -1,6 +1,22 @@
 import { formatCandleTimestamp, formatPrice, formatVolume } from "./htsData";
 
-export default function HtsChart({ series, interval = "1m", selectedIndex = -1, onSelect }) {
+function buildMovingAveragePoints(series, period, scaleY, paddingLeft, step) {
+  return series
+    .map((_, index) => {
+      if (index < period - 1) {
+        return null;
+      }
+      const window = series.slice(index - period + 1, index + 1);
+      const average = window.reduce((sum, item) => sum + Number(item.close), 0) / period;
+      const x = paddingLeft + step * index + step / 2;
+      const y = scaleY(average);
+      return `${x},${y}`;
+    })
+    .filter(Boolean)
+    .join(" ");
+}
+
+export default function HtsChart({ series, interval = "1m", selectedIndex = -1, onSelect, showStudies = false }) {
   if (!series.length) {
     return <div className="empty-box">차트 데이터가 없습니다.</div>;
   }
@@ -25,6 +41,14 @@ export default function HtsChart({ series, interval = "1m", selectedIndex = -1, 
   const scaleVolumeY = (value) => volumeTop + volumeHeight - (Number(value || 0) / maxVolume) * volumeHeight;
   const yTicks = [0, 1, 2, 3].map((tick) => maxHigh - (range / 3) * tick);
   const labelStep = Math.max(Math.floor(series.length / 5), 1);
+  const studyLines = showStudies
+    ? [
+        { key: "ma5", points: buildMovingAveragePoints(series, 5, scaleY, paddingLeft, step), className: "study-ma5" },
+        { key: "ma10", points: buildMovingAveragePoints(series, 10, scaleY, paddingLeft, step), className: "study-ma10" },
+        { key: "ma20", points: buildMovingAveragePoints(series, 20, scaleY, paddingLeft, step), className: "study-ma20" },
+        { key: "ma60", points: buildMovingAveragePoints(series, 60, scaleY, paddingLeft, step), className: "study-ma60" },
+      ]
+    : [];
 
   return (
     <div className="chart-wrap">
@@ -85,6 +109,10 @@ export default function HtsChart({ series, interval = "1m", selectedIndex = -1, 
             </g>
           );
         })}
+
+        {studyLines.map((line) =>
+          line.points ? <polyline key={line.key} points={line.points} className={`chart-study-line ${line.className}`} /> : null,
+        )}
 
         <line
           x1={paddingLeft}

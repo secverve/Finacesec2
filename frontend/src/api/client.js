@@ -62,8 +62,14 @@ export const api = {
   listRiskEvents(token, deviceId) {
     return request("/admin/risk-events", { token, deviceId });
   },
+  getRiskEventDetail(token, riskEventId, deviceId) {
+    return request(`/admin/risk-events/${riskEventId}`, { token, deviceId });
+  },
   listAuditLogs(token, deviceId) {
     return request("/admin/audit-logs", { token, deviceId });
+  },
+  listRuleCatalog(token, deviceId) {
+    return request("/admin/rules", { token, deviceId });
   },
   applyAdminAction(token, riskEventId, body, deviceId) {
     return request(`/admin/risk-events/${riskEventId}/actions`, {

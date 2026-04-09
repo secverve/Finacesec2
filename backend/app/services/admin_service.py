@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.enums import AdditionalAuthStatus, AdminActionType, OrderStatus, RiskDecision, RiskEventStatus, UserStatus
+from app.fds.rules import build_rule_catalog
 from app.fds.types import RequestContext
 from app.models.additional_auth_request import AdditionalAuthRequest
 from app.models.admin_action import AdminAction
@@ -44,6 +45,19 @@ def get_risk_event_detail(db: Session, risk_event_id: str) -> RiskEvent | None:
 def list_audit_logs(db: Session) -> list[AuditLog]:
     statement = select(AuditLog).order_by(AuditLog.created_at.desc()).limit(200)
     return list(db.scalars(statement).all())
+
+
+def list_rule_catalog() -> list[dict]:
+    return [
+        {
+            "rule_code": rule.rule_code,
+            "rule_name": rule.rule_name,
+            "description": rule.description,
+            "score": rule.score,
+            "severity": rule.severity.value,
+        }
+        for rule in build_rule_catalog()
+    ]
 
 
 def _get_risk_event_or_404(db: Session, risk_event_id: str) -> RiskEvent:

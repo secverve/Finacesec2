@@ -50,6 +50,14 @@ function ValuePill({ value, variant = "neutral" }) {
   return <span className={`value-pill value-pill-${variant}`}>{value}</span>;
 }
 
+function shortId(value) {
+  if (!value) {
+    return "-";
+  }
+
+  return String(value).slice(0, 8);
+}
+
 function getAuditTraceId(log) {
   return log?.payload?.trace?.request_id || log?.payload?.request_id || log?.payload?.trace_id || "-";
 }
@@ -83,6 +91,9 @@ function getAuditSummary(log) {
     .join(" / ");
 }
 
+const ADMIN_TOP_TABS = ["실시간 관제", "사건 분석", "감사 추적", "공격 실습", "룰 현황", "시장 참조"];
+const ADMIN_TOP_TAB_CODES = ["9001", "9002", "9003", "9004", "9005", "9006"];
+
 export default function App() {
   const [token, setToken] = useState(() => window.localStorage.getItem("verve-fds-token") || "");
   const [deviceId] = useState(() => window.localStorage.getItem("verve-device-id") || crypto.randomUUID());
@@ -92,15 +103,23 @@ export default function App() {
   const [orders, setOrders] = useState([]);
   const [riskEvents, setRiskEvents] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
+  const [ruleCatalog, setRuleCatalog] = useState([]);
+  const [selectedRiskEventId, setSelectedRiskEventId] = useState("");
+  const [selectedRiskDetail, setSelectedRiskDetail] = useState(null);
+  const [riskDetailLoading, setRiskDetailLoading] = useState(false);
+  const [lastLabExecution, setLastLabExecution] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [searchText, setSearchText] = useState("");
   const [marketView, setMarketView] = useState("ALL");
+  const [activeTopTab, setActiveTopTab] = useState(0);
   const [lowerTab, setLowerTab] = useState("orders");
   const [chartInterval, setChartInterval] = useState("1m");
   const [candles, setCandles] = useState([]);
+  const [dailyCandles, setDailyCandles] = useState([]);
   const [selectedCandleIndex, setSelectedCandleIndex] = useState(-1);
   const [chartLoading, setChartLoading] = useState(false);
+  const [dailyLoading, setDailyLoading] = useState(false);
   const [labScenarios, setLabScenarios] = useState([]);
   const [scenarioLoadingCode, setScenarioLoadingCode] = useState("");
   const [loginForm, setLoginForm] = useState({
@@ -142,8 +161,27 @@ export default function App() {
   }, [isAdmin, lowerTab]);
 
   useEffect(() => {
+    if (isAdmin && lowerTab === "orders") {
+      setLowerTab("audit");
+    }
+  }, [isAdmin]);
+
+  useEffect(() => {
     loadCandles();
   }, [orderForm.symbol, chartInterval]);
+
+  useEffect(() => {
+    loadDailyCandles();
+  }, [orderForm.symbol]);
+
+  useEffect(() => {
+    if (!isAdmin || !token || !selectedRiskEventId) {
+      setSelectedRiskDetail(null);
+      return;
+    }
+
+    loadRiskEventDetail(selectedRiskEventId);
+  }, [isAdmin, token, selectedRiskEventId]);
 
   useEffect(() => {
     if (!token) {
@@ -231,14 +269,15 @@ export default function App() {
       const orderList = await api.listOrders(activeToken, deviceId);
       const portfolioSnapshot = await api.getPortfolio(activeToken, deviceId);
 
-      let adminData = { riskEvents: [], auditLogs: [] };
+      let adminData = { riskEvents: [], auditLogs: [], labScenarios: [], ruleCatalog: [] };
       if (me.role === "ADMIN") {
-        const [eventList, logList, scenarioList] = await Promise.all([
+        const [eventList, logList, scenarioList, ruleList] = await Promise.all([
           api.listRiskEvents(activeToken, deviceId),
           api.listAuditLogs(activeToken, deviceId),
           api.listLabScenarios(activeToken, deviceId),
+          api.listRuleCatalog(activeToken, deviceId),
         ]);
-        adminData = { riskEvents: eventList, auditLogs: logList, labScenarios: scenarioList };
+        adminData = { riskEvents: eventList, auditLogs: logList, labScenarios: scenarioList, ruleCatalog: ruleList };
       }
 
       startTransition(() => {
@@ -249,6 +288,7 @@ export default function App() {
         setRiskEvents(adminData.riskEvents);
         setAuditLogs(adminData.auditLogs);
         setLabScenarios(adminData.labScenarios || []);
+        setRuleCatalog(adminData.ruleCatalog || []);
         setOrderForm((current) => ({
           ...current,
           account_id: current.account_id || portfolioSnapshot.account?.id || "",
@@ -258,6 +298,10 @@ export default function App() {
               ? String(Number(stockList[0].current_price))
               : current.price,
         }));
+        if (me.role === "ADMIN") {
+          const stillExists = adminData.riskEvents.some((event) => event.id === selectedRiskEventId);
+          setSelectedRiskEventId(stillExists ? selectedRiskEventId : (adminData.riskEvents[0]?.id ?? ""));
+        }
       });
     } catch (refreshError) {
       setError(localizeMessage(refreshError.message));
@@ -294,6 +338,45 @@ export default function App() {
     }
   }
 
+  async function loadDailyCandles(symbol = orderForm.symbol, { silent = false } = {}) {
+    if (!symbol) {
+      setDailyCandles([]);
+      return;
+    }
+
+    if (!silent) {
+      setDailyLoading(true);
+    }
+
+    try {
+      const candleList = await api.getCandles(symbol, "1d", 40);
+      setDailyCandles(candleList);
+    } catch (candleError) {
+      setError(localizeMessage(candleError.message));
+    } finally {
+      if (!silent) {
+        setDailyLoading(false);
+      }
+    }
+  }
+
+  async function loadRiskEventDetail(riskEventId) {
+    if (!riskEventId) {
+      setSelectedRiskDetail(null);
+      return;
+    }
+
+    setRiskDetailLoading(true);
+    try {
+      const detail = await api.getRiskEventDetail(token, riskEventId, deviceId);
+      setSelectedRiskDetail(detail);
+    } catch (detailError) {
+      setError(localizeMessage(detailError.message));
+    } finally {
+      setRiskDetailLoading(false);
+    }
+  }
+
   async function handleLogin(event) {
     event.preventDefault();
     setLoading(true);
@@ -322,7 +405,11 @@ export default function App() {
       setOrders([]);
       setRiskEvents([]);
       setAuditLogs([]);
+      setRuleCatalog([]);
       setLabScenarios([]);
+      setSelectedRiskEventId("");
+      setSelectedRiskDetail(null);
+      setLastLabExecution(null);
     }
   }
 
@@ -369,11 +456,16 @@ export default function App() {
               ? "관리자 승인 처리"
               : actionType === "BLOCK"
                 ? "관리자 차단 처리"
-                : "추가 인증 요청",
+                : actionType === "LOCK_ACCOUNT"
+                  ? "계정 잠금 처리"
+                  : actionType === "UNLOCK_ACCOUNT"
+                    ? "계정 잠금 해제"
+                    : "추가 인증 요청",
         },
         deviceId,
       );
       await refreshDashboard(token);
+      await loadRiskEventDetail(riskEventId);
     } catch (actionError) {
       setError(localizeMessage(actionError.message));
       setLoading(false);
@@ -385,8 +477,12 @@ export default function App() {
     setError("");
 
     try {
-      await api.executeLabScenario(token, scenarioCode, deviceId);
+      const result = await api.executeLabScenario(token, scenarioCode, deviceId);
+      setLastLabExecution(result);
       await refreshDashboard(token);
+      if (result.created_risk_event_ids?.[0]) {
+        setSelectedRiskEventId(result.created_risk_event_ids[0]);
+      }
       setLowerTab("lab");
     } catch (scenarioError) {
       setError(localizeMessage(scenarioError.message));
@@ -418,14 +514,26 @@ export default function App() {
 
   const stockRows = filteredStocks.length ? filteredStocks : stocks;
   const selectedStock = stocks.find((stock) => stock.symbol === orderForm.symbol) || stockRows[0] || stocks[0] || null;
-  const snapshot = buildStockSnapshot(selectedStock);
+  const snapshot =
+    buildStockSnapshot(selectedStock) || {
+      currentPrice: 0,
+      previousClose: 1,
+      change: 0,
+      changeRate: 0,
+      open: 0,
+      high: 0,
+      low: 0,
+      volume: 0,
+      tradingValue: 0,
+      tick: 10,
+    };
   const activeCandle = candles[selectedCandleIndex] || candles[candles.length - 1] || null;
   const candleReferenceClose =
     candles.length > 1
       ? Number(candles[Math.max(candles.length - 2, 0)]?.close || 0)
-      : Number(snapshot?.previousClose || 0);
+      : Number(snapshot.previousClose || 0);
   const displaySnapshot =
-    activeCandle && snapshot
+    activeCandle
       ? {
           ...snapshot,
           currentPrice: Number(activeCandle.close),
@@ -444,6 +552,7 @@ export default function App() {
           tradingValue: Number(activeCandle.close) * Number(activeCandle.volume),
         }
       : snapshot;
+  const referenceClose = Math.max(Number(displaySnapshot.previousClose || 0), 1);
   const orderBook = buildOrderBook(selectedStock, displaySnapshot);
   const investorFlows = buildInvestorFlows(selectedStock, displaySnapshot);
   const tradeTape = buildTradeTape(selectedStock, orders, displaySnapshot);
@@ -455,20 +564,1012 @@ export default function App() {
   );
   const totalUnrealizedPnl = holdings.reduce((sum, holding) => sum + Number(holding.unrealized_pnl || 0), 0);
   const totalReturnRate = totalCostBasis ? (totalUnrealizedPnl / totalCostBasis) * 100 : 0;
+  const watchlistCount = stocks.filter((stock) => stock.is_watchlist).length;
+  const executedOrders = orders.filter((order) => order.status === "EXECUTED").length;
+  const acceptedOrders = orders.filter((order) => order.status === "ACCEPTED").length;
+  const heldOrders = orders.filter((order) => order.status === "HELD").length;
+  const blockedOrders = orders.filter((order) => order.status === "BLOCKED").length;
+  const criticalRiskCount = riskRows.filter((row) => row.severity === "CRITICAL").length;
+  const kospiRows = stocks.filter((stock) => stock.market === "KOSPI");
+  const kosdaqRows = stocks.filter((stock) => stock.market === "KOSDAQ");
+  const kospiChangeRate = kospiRows.length
+    ? kospiRows.reduce((sum, stock) => sum + Number(buildStockSnapshot(stock)?.changeRate || 0), 0) / kospiRows.length
+    : 0;
+  const kosdaqChangeRate = kosdaqRows.length
+    ? kosdaqRows.reduce((sum, stock) => sum + Number(buildStockSnapshot(stock)?.changeRate || 0), 0) / kosdaqRows.length
+    : 0;
+  const marketIndices = [
+    {
+      label: "KOSPI",
+      value: (2638.25 + kospiChangeRate * 8).toFixed(2),
+      changeRate: kospiChangeRate,
+      summary: `${kospiRows.length || 0}개 종목 기준`,
+    },
+    {
+      label: "KOSDAQ",
+      value: (854.4 + kosdaqChangeRate * 5).toFixed(2),
+      changeRate: kosdaqChangeRate,
+      summary: `${kosdaqRows.length || 0}개 종목 기준`,
+    },
+  ];
+  const accountMonitorRows = [
+    { label: "총자산", value: `${formatPrice(portfolio?.total_asset_value)}원`, className: "" },
+    { label: "예수금", value: `${formatPrice(portfolio?.total_cash)}원`, className: "" },
+    { label: "평가손익", value: `${formatPrice(totalUnrealizedPnl)}원`, className: getSignedClass(totalUnrealizedPnl) },
+    { label: "수익률", value: formatPercent(totalReturnRate), className: getSignedClass(totalReturnRate) },
+  ];
+  const opsMonitorRows = [
+    { label: "관심종목", value: `${watchlistCount}개`, className: "" },
+    { label: "체결완료", value: `${executedOrders}건`, className: "" },
+    { label: "접수대기", value: `${acceptedOrders}건`, className: acceptedOrders ? "is-flat" : "" },
+    { label: "보류/차단", value: `${heldOrders + blockedOrders}건`, className: heldOrders + blockedOrders ? "is-down" : "" },
+    { label: "위험이벤트", value: `${riskRows.length}건`, className: riskRows.length ? "is-down" : "" },
+    { label: "고위험", value: `${criticalRiskCount}건`, className: criticalRiskCount ? "is-down" : "" },
+  ];
+  const shortcutRows = [
+    { key: "F5", action: "전체 새로고침" },
+    { key: "Alt+1", action: "주문 탭" },
+    { key: "Alt+2", action: "분봉/일봉 탭" },
+    { key: "Alt+3", action: "FDS 경보 탭" },
+    { key: "Alt+4", action: "잔고 탭" },
+    { key: "Alt+B / Alt+S", action: "매수 / 매도 전환" },
+  ];
   const visibleLowerTabs = LOWER_TABS.filter((tab) => {
     if (tab.key === "audit" || tab.key === "lab") {
       return isAdmin;
     }
     return true;
   });
-  const marketStatus = [
-    { label: "관심종목", value: `${stocks.filter((stock) => stock.is_watchlist).length}개` },
-    { label: "보유종목", value: `${holdings.length}개` },
-    { label: "평가손익", value: `${formatPrice(totalUnrealizedPnl)}원` },
-    { label: "수익률", value: formatPercent(totalReturnRate) },
-    { label: "보류주문", value: `${orders.filter((order) => order.status === "HELD").length}건` },
-    { label: "위험이벤트", value: `${riskRows.length}건` },
+  const dailySeries = dailyCandles.length ? dailyCandles : candles;
+  const chartFolderRows = ["관심그룹", "히스토리", "보유종목", "과거종목", "배터리", "반도체", "관심종목02", "관심종목03"];
+  const afterHoursRows = candles
+    .slice(-10)
+    .reverse()
+    .map((candle, index) => {
+      const basis = Number(candle.close);
+      const price = basis + ((index % 3) - 1) * displaySnapshot.tick;
+      const change = price - Number(displaySnapshot.previousClose || 0);
+      return {
+        id: `${candle.timestamp}-${index}`,
+        time: formatCandleTimestamp(candle.timestamp, chartInterval),
+        price,
+        change,
+        volume: Math.max(Math.round(Number(candle.volume) * 0.08), 10),
+        session: index < 4 ? "장후 단일가" : "시간외 단일가",
+      };
+    });
+  const averageDailyVolume = dailySeries.length
+    ? dailySeries.reduce((sum, candle) => sum + Number(candle.volume || 0), 0) / dailySeries.length
+    : Number(displaySnapshot.volume || 0);
+  const comparisonRows = [
+    {
+      label: "현재가 vs 전일종가",
+      today: formatPrice(displaySnapshot.currentPrice),
+      previous: formatPrice(displaySnapshot.previousClose),
+      delta: formatPercent(displaySnapshot.changeRate),
+      className: getSignedClass(displaySnapshot.changeRate),
+    },
+    {
+      label: "시가 vs 전일종가",
+      today: formatPrice(displaySnapshot.open),
+      previous: formatPrice(displaySnapshot.previousClose),
+      delta: formatPercent(((displaySnapshot.open - displaySnapshot.previousClose) / referenceClose) * 100),
+      className: getSignedClass(displaySnapshot.open - displaySnapshot.previousClose),
+    },
+    {
+      label: "고가 vs 전일종가",
+      today: formatPrice(displaySnapshot.high),
+      previous: formatPrice(displaySnapshot.previousClose),
+      delta: formatPercent(((displaySnapshot.high - displaySnapshot.previousClose) / referenceClose) * 100),
+      className: "is-up",
+    },
+    {
+      label: "저가 vs 전일종가",
+      today: formatPrice(displaySnapshot.low),
+      previous: formatPrice(displaySnapshot.previousClose),
+      delta: formatPercent(((displaySnapshot.low - displaySnapshot.previousClose) / referenceClose) * 100),
+      className: "is-down",
+    },
+    {
+      label: "거래량 vs 평균",
+      today: formatVolume(displaySnapshot.volume),
+      previous: formatVolume(averageDailyVolume),
+      delta: formatPercent(((Number(displaySnapshot.volume || 0) - averageDailyVolume) / Math.max(averageDailyVolume, 1)) * 100),
+      className: getSignedClass(Number(displaySnapshot.volume || 0) - averageDailyVolume),
+    },
   ];
+  const selectedRiskSummary = riskEvents.find((event) => event.id === selectedRiskEventId) || riskEvents[0] || null;
+  const selectedRiskHits = selectedRiskDetail?.rule_hits || [];
+  const selectedRiskActions = selectedRiskDetail?.admin_actions || [];
+  const relatedAuditLogs = auditLogs.filter((log) => {
+    const payload = log.payload?.data || {};
+    return (
+      log.target_id === selectedRiskEventId ||
+      payload.risk_event_id === selectedRiskEventId ||
+      (selectedRiskSummary?.order_id && log.target_id === selectedRiskSummary.order_id) ||
+      (selectedRiskSummary?.order_id && payload.created_order_ids?.includes?.(selectedRiskSummary.order_id)) ||
+      (selectedRiskSummary?.user_id && log.actor_user_id === selectedRiskSummary.user_id)
+    );
+  });
+  const regionThreatRows = Object.entries(
+    riskEvents.reduce((accumulator, event) => {
+      const region = REGION_LABELS[event.region] || event.region;
+      accumulator[region] = (accumulator[region] || 0) + 1;
+      return accumulator;
+    }, {}),
+  )
+    .map(([region, count]) => ({ region, count }))
+    .sort((left, right) => right.count - left.count)
+    .slice(0, 5);
+  const deviceThreatRows = Object.entries(
+    riskEvents.reduce((accumulator, event) => {
+      accumulator[event.device_id] = (accumulator[event.device_id] || 0) + 1;
+      return accumulator;
+    }, {}),
+  )
+    .map(([device, count]) => ({ device, count }))
+    .sort((left, right) => right.count - left.count)
+    .slice(0, 5);
+  const pendingReviewCount = riskEvents.filter((event) => event.status === "OPEN").length;
+  const authRequiredCount = riskEvents.filter(
+    (event) => event.status === "AUTH_REQUIRED" || event.decision === "AUTH_REQUIRED",
+  ).length;
+  const blockedRiskEventCount = riskEvents.filter((event) => event.decision === "BLOCKED").length;
+  const watchlistThreatCount = riskEvents.filter((event) =>
+    stocks.some((stock) => stock.symbol === event.symbol && stock.is_watchlist),
+  ).length;
+  const uniqueThreatUsers = new Set(riskEvents.map((event) => event.user_id)).size;
+  const lockedActionCount = auditLogs.filter(
+    (log) => log.event_type === "ADMIN_ACTION" && log.payload?.data?.action_type === "LOCK_ACCOUNT",
+  ).length;
+  const surveillanceSummaryCards = [
+    { label: "검토 대기", value: `${pendingReviewCount}건`, note: "수동 분석 필요", className: pendingReviewCount ? "is-down" : "" },
+    { label: "추가 인증", value: `${authRequiredCount}건`, note: "OTP·본인확인 요청", className: authRequiredCount ? "is-flat" : "" },
+    { label: "차단 조치", value: `${blockedRiskEventCount}건`, note: "자동/수동 차단 포함", className: blockedRiskEventCount ? "is-down" : "" },
+    { label: "관심종목 위협", value: `${watchlistThreatCount}건`, note: "감시종목 주문 연계", className: watchlistThreatCount ? "is-up" : "" },
+  ];
+  const marketReferenceRows = [...stockRows]
+    .map((stock) => {
+      const rowSnapshot = buildStockSnapshot(stock);
+      return {
+        stock,
+        rowSnapshot,
+      };
+    })
+    .sort((left, right) => Math.abs(right.rowSnapshot.changeRate) - Math.abs(left.rowSnapshot.changeRate))
+    .slice(0, 8);
+  const selectedEntityRows = selectedRiskSummary
+    ? [
+        { label: "이벤트 ID", value: shortId(selectedRiskSummary.id) },
+        { label: "주문 ID", value: shortId(selectedRiskSummary.order_id) },
+        { label: "종목", value: `${selectedRiskSummary.symbol}` },
+        { label: "사용자", value: shortId(selectedRiskSummary.user_id) },
+        { label: "접속 IP", value: selectedRiskSummary.ip_address },
+        {
+          label: "지역 / 디바이스",
+          value: `${REGION_LABELS[selectedRiskSummary.region] || selectedRiskSummary.region} / ${selectedRiskSummary.device_id}`,
+        },
+      ]
+    : [];
+  const responseGuideRows = selectedRiskHits.slice(0, 4);
+  const toolbarNote = isAdmin
+    ? "관제 큐/감사로그 7초 자동 갱신 / 사건 선택 후 즉시 조치 / F5 새로고침"
+    : "공개 시세 API 기준, 7초 자동 갱신 / F5 새로고침 / Alt+1~4 탭 / Alt+B,S 매매";
+  const displayTopTabs = isAdmin ? ADMIN_TOP_TABS : TOP_TABS;
+  const displayTopTabCodes = isAdmin ? ADMIN_TOP_TAB_CODES : ["0101", "0110", "0120", "0301", "0130", "0140"];
+
+  function renderAdminCenterView() {
+    if (activeTopTab === 1) {
+      return (
+        <div className="tab-view-stack">
+          <section className="hts-panel">
+            <div className="panel-title">사건 분석</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>항목</th>
+                    <th>값</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>위험 이벤트</td>
+                    <td>{selectedRiskSummary?.id || "-"}</td>
+                  </tr>
+                  <tr>
+                    <td>종목 / 사용자</td>
+                    <td>{selectedRiskSummary ? `${selectedRiskSummary.symbol} / ${selectedRiskSummary.user_id}` : "-"}</td>
+                  </tr>
+                  <tr>
+                    <td>점수 / 등급</td>
+                    <td>
+                      {selectedRiskSummary ? `${selectedRiskSummary.total_score}점 / ${RISK_SEVERITY_LABELS[selectedRiskSummary.severity]}` : "-"}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>접속 정보</td>
+                    <td>
+                      {selectedRiskSummary
+                        ? `${selectedRiskSummary.ip_address} / ${REGION_LABELS[selectedRiskSummary.region] || selectedRiskSummary.region} / ${selectedRiskSummary.device_id}`
+                        : "-"}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>요약</td>
+                    <td>{selectedRiskSummary?.summary || "-"}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="hts-panel">
+            <div className="panel-title">룰 히트 상세</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>룰 코드</th>
+                    <th>룰명</th>
+                    <th>점수</th>
+                    <th>심각도</th>
+                    <th>사유</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedRiskHits.length ? (
+                    selectedRiskHits.map((hit) => (
+                      <tr key={hit.id}>
+                        <td>{hit.rule_code}</td>
+                        <td>{hit.rule_name}</td>
+                        <td>{hit.score}</td>
+                        <td>{RISK_SEVERITY_LABELS[hit.severity] || hit.severity}</td>
+                        <td>{hit.reason}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="5">{riskDetailLoading ? "사건 분석을 불러오는 중입니다." : "선택된 이벤트의 룰 히트가 없습니다."}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="hts-panel">
+            <div className="panel-title">관리자 조치 이력</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>시각</th>
+                    <th>조치</th>
+                    <th>코멘트</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedRiskActions.length ? (
+                    selectedRiskActions.map((action) => (
+                      <tr key={action.id}>
+                        <td>{formatTime(action.created_at)}</td>
+                        <td>{action.action_type}</td>
+                        <td>{action.comment}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="3">등록된 관리자 조치 이력이 없습니다.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    if (activeTopTab === 2) {
+      return (
+        <div className="tab-view-stack">
+          <section className="hts-panel">
+            <div className="panel-title">감사 추적</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>시간</th>
+                    <th>이벤트</th>
+                    <th>대상</th>
+                    <th>추적ID</th>
+                    <th>요약</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(relatedAuditLogs.length ? relatedAuditLogs : auditLogs).slice(0, 20).map((log) => (
+                    <tr key={log.id}>
+                      <td>{formatTime(log.created_at)}</td>
+                      <td>{log.event_type}</td>
+                      <td>{`${log.target_type} ${log.target_id || "-"}`}</td>
+                      <td>{getAuditTraceId(log)}</td>
+                      <td>{getAuditSummary(log)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    if (activeTopTab === 3) {
+      return (
+        <div className="tab-view-stack">
+          <section className="hts-panel">
+            <div className="panel-title">공격 실습 시나리오</div>
+            <div className="panel-body lab-grid">
+              {labScenarios.map((scenario) => (
+                <article key={scenario.code} className="lab-card">
+                  <div className="lab-card-header">
+                    <div>
+                      <strong>{scenario.title}</strong>
+                      <p>{scenario.description}</p>
+                    </div>
+                    <ValuePill value="안전 실습" variant="neutral" />
+                  </div>
+                  <div className="lab-card-meta">
+                    <span>탐지 포인트: {scenario.detection_focus}</span>
+                    <span>예상 결과: {scenario.expected_outcome}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="lab-execute-button"
+                    disabled={scenarioLoadingCode === scenario.code}
+                    onClick={() => handleExecuteLabScenario(scenario.code)}
+                  >
+                    {scenarioLoadingCode === scenario.code ? "실행 중..." : "시나리오 실행"}
+                  </button>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          {lastLabExecution ? (
+            <section className="hts-panel">
+              <div className="panel-title">최근 실습 결과</div>
+              <div className="panel-body compact">
+                <table className="hts-table">
+                  <tbody>
+                    <tr>
+                      <th>시나리오</th>
+                      <td>{lastLabExecution.scenario_code}</td>
+                    </tr>
+                    <tr>
+                      <th>생성 주문</th>
+                      <td>{lastLabExecution.created_order_ids?.join(", ") || "-"}</td>
+                    </tr>
+                    <tr>
+                      <th>생성 위험 이벤트</th>
+                      <td>{lastLabExecution.created_risk_event_ids?.join(", ") || "-"}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
+        </div>
+      );
+    }
+
+    if (activeTopTab === 4) {
+      return (
+        <section className="hts-panel">
+          <div className="panel-title">FDS 룰 카탈로그</div>
+          <div className="panel-body compact">
+            <table className="hts-table">
+              <thead>
+                <tr>
+                  <th>룰 코드</th>
+                  <th>룰명</th>
+                  <th>점수</th>
+                  <th>심각도</th>
+                  <th>설명</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ruleCatalog.map((rule) => (
+                  <tr key={rule.rule_code}>
+                    <td>{rule.rule_code}</td>
+                    <td>{rule.rule_name}</td>
+                    <td>{rule.score}</td>
+                    <td>{RISK_SEVERITY_LABELS[rule.severity] || rule.severity}</td>
+                    <td>{rule.description}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      );
+    }
+
+    if (activeTopTab === 5) {
+      return (
+        <div className="tab-view-stack">
+          <section className="hts-panel">
+            <div className="panel-title">시장 참조</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>코드</th>
+                    <th>종목명</th>
+                    <th>현재가</th>
+                    <th>등락률</th>
+                    <th>거래량</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stockRows.map((stock) => {
+                    const rowSnapshot = buildStockSnapshot(stock);
+                    return (
+                      <tr key={stock.id}>
+                        <td>{stock.symbol}</td>
+                        <td>{normalizeStockName(stock)}</td>
+                        <td className={getSignedClass(rowSnapshot.change)}>{formatPrice(stock.current_price)}</td>
+                        <td className={getSignedClass(rowSnapshot.changeRate)}>{formatPercent(rowSnapshot.changeRate)}</td>
+                        <td>{formatVolume(rowSnapshot.volume)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    return (
+      <div className="tab-view-stack">
+        <section className="hts-panel">
+          <div className="panel-title">실시간 경보 큐</div>
+          <div className="panel-body compact">
+            <table className="hts-table table-clickable">
+              <thead>
+                <tr>
+                  <th>시간</th>
+                  <th>종목</th>
+                  <th>점수</th>
+                  <th>등급</th>
+                  <th>판정</th>
+                  <th>지역</th>
+                  <th>장치</th>
+                </tr>
+              </thead>
+              <tbody>
+                {riskEvents.length ? (
+                  riskEvents.map((event) => (
+                    <tr
+                      key={event.id}
+                      className={event.id === selectedRiskEventId ? "selected" : ""}
+                      onClick={() => setSelectedRiskEventId(event.id)}
+                    >
+                      <td>{formatTime(event.created_at)}</td>
+                      <td>{event.symbol}</td>
+                      <td>{event.total_score}</td>
+                      <td>{RISK_SEVERITY_LABELS[event.severity] || event.severity}</td>
+                      <td>{RISK_DECISION_LABELS[event.decision] || event.decision}</td>
+                      <td>{REGION_LABELS[event.region] || event.region}</td>
+                      <td>{event.device_id}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan="7">현재 관제 중인 이벤트가 없습니다.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="hts-panel">
+          <div className="panel-title">선택 사건 포렌식</div>
+          <div className="panel-body compact">
+            <table className="hts-table">
+              <thead>
+                <tr>
+                  <th>항목</th>
+                  <th>값</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>이벤트 상태</td>
+                  <td>
+                    {selectedRiskSummary
+                      ? `${RISK_STATUS_LABELS[selectedRiskSummary.status] || selectedRiskSummary.status} / ${RISK_DECISION_LABELS[selectedRiskSummary.decision] || selectedRiskSummary.decision}`
+                      : "-"}
+                  </td>
+                </tr>
+                <tr>
+                  <td>요약</td>
+                  <td>{selectedRiskSummary?.summary || "-"}</td>
+                </tr>
+                <tr>
+                  <td>룰 히트 수</td>
+                  <td>{selectedRiskHits.length}건</td>
+                </tr>
+                <tr>
+                  <td>관련 감사 로그</td>
+                  <td>{relatedAuditLogs.length}건</td>
+                </tr>
+                <tr>
+                  <td>최근 조치</td>
+                  <td>{selectedRiskActions[0] ? `${selectedRiskActions[0].action_type} / ${selectedRiskActions[0].comment}` : "없음"}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  function renderCenterView() {
+    if (isAdmin) {
+      return renderAdminCenterView();
+    }
+
+    if (activeTopTab === 1) {
+      return (
+        <div className="tab-view-stack">
+          <section className="hts-panel">
+            <div className="panel-title">복수 현재가</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>코드</th>
+                    <th>종목명</th>
+                    <th>현재가</th>
+                    <th>대비</th>
+                    <th>등락률</th>
+                    <th>시가</th>
+                    <th>고가</th>
+                    <th>저가</th>
+                    <th>거래량</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stockRows.map((stock) => {
+                    const rowSnapshot = buildStockSnapshot(stock);
+                    return (
+                      <tr key={stock.id} className={stock.symbol === selectedStock?.symbol ? "selected" : ""}>
+                        <td>{stock.symbol}</td>
+                        <td>{normalizeStockName(stock)}</td>
+                        <td className={getSignedClass(rowSnapshot.change)}>{formatPrice(stock.current_price)}</td>
+                        <td className={getSignedClass(rowSnapshot.change)}>{formatChange(rowSnapshot.change)}</td>
+                        <td className={getSignedClass(rowSnapshot.changeRate)}>{formatPercent(rowSnapshot.changeRate)}</td>
+                        <td>{formatPrice(rowSnapshot.open)}</td>
+                        <td className="is-up">{formatPrice(rowSnapshot.high)}</td>
+                        <td className="is-down">{formatPrice(rowSnapshot.low)}</td>
+                        <td>{formatVolume(rowSnapshot.volume)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="hts-panel">
+            <div className="panel-title">복수 현재가 요약</div>
+            <div className="panel-body market-monitor-board">
+              <div className="monitor-index-strip">
+                {marketIndices.map((index) => (
+                  <article key={index.label} className="index-tile">
+                    <span>{index.label}</span>
+                    <strong>{Number(index.value).toLocaleString("ko-KR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                    <em className={getSignedClass(index.changeRate)}>{formatPercent(index.changeRate)}</em>
+                  </article>
+                ))}
+              </div>
+              <div className="monitor-section-grid">
+                <section className="monitor-section">
+                  <div className="monitor-section-title">계좌/수익</div>
+                  <table className="mini-monitor-table">
+                    <tbody>
+                      {accountMonitorRows.map((row) => (
+                        <tr key={row.label}>
+                          <th>{row.label}</th>
+                          <td className={row.className}>{row.value}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+                <section className="monitor-section">
+                  <div className="monitor-section-title">주문/FDS</div>
+                  <table className="mini-monitor-table">
+                    <tbody>
+                      {opsMonitorRows.map((row) => (
+                        <tr key={row.label}>
+                          <th>{row.label}</th>
+                          <td className={row.className}>{row.value}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              </div>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    if (activeTopTab === 2) {
+      return (
+        <div className="tab-view-stack">
+          <section className="hts-panel">
+            <div className="panel-title">시간외 체결</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>시간</th>
+                    <th>세션</th>
+                    <th>체결가</th>
+                    <th>대비</th>
+                    <th>체결량</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {afterHoursRows.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.time}</td>
+                      <td>{row.session}</td>
+                      <td className={getSignedClass(row.change)}>{formatPrice(row.price)}</td>
+                      <td className={getSignedClass(row.change)}>{formatChange(row.change)}</td>
+                      <td>{formatVolume(row.volume)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section className="hts-panel">
+            <div className="panel-title">시간외 참고</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>항목</th>
+                    <th>값</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>기준 종목</td>
+                    <td>{selectedStock ? `${selectedStock.symbol} ${normalizeStockName(selectedStock)}` : "-"}</td>
+                  </tr>
+                  <tr>
+                    <td>현재 기준가</td>
+                    <td>{formatPrice(displaySnapshot.currentPrice)}</td>
+                  </tr>
+                  <tr>
+                    <td>전일 종가</td>
+                    <td>{formatPrice(displaySnapshot.previousClose)}</td>
+                  </tr>
+                  <tr>
+                    <td>예상 체결건수</td>
+                    <td>{afterHoursRows.length}건</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    if (activeTopTab === 3) {
+      return (
+        <section className="hts-panel chart-workspace-panel">
+          <div className="panel-title">일자별 주가</div>
+          <div className="panel-body chart-workspace">
+            <aside className="chart-side-explorer">
+              <div className="chart-explorer-title">관심그룹</div>
+              <div className="chart-folder-list">
+                {chartFolderRows.map((folder) => (
+                  <button key={folder} type="button" className="chart-folder-row">
+                    <span className="folder-icon" />
+                    <span>{folder}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="chart-explorer-title">종목</div>
+              <div className="chart-symbol-list">
+                {stockRows.slice(0, 16).map((stock) => (
+                  <button
+                    key={stock.symbol}
+                    type="button"
+                    className={`chart-symbol-row ${stock.symbol === selectedStock?.symbol ? "active" : ""}`}
+                    onClick={() => handleSelectStock(stock)}
+                  >
+                    <span>{normalizeStockName(stock)}</span>
+                    <strong className={getSignedClass(buildStockSnapshot(stock)?.change)}>{formatPrice(stock.current_price)}</strong>
+                  </button>
+                ))}
+              </div>
+            </aside>
+
+            <div className="chart-main-workspace">
+              <div className="chart-workspace-toolbar">
+                <div className="chart-workspace-head">
+                  <strong>{selectedStock ? `${selectedStock.symbol} ${normalizeStockName(selectedStock)}` : "-"}</strong>
+                  <span className={getSignedClass(displaySnapshot.change)}>
+                    {formatPrice(displaySnapshot.currentPrice)} / {formatPercent(displaySnapshot.changeRate)}
+                  </span>
+                </div>
+                <div className="chart-study-strip">
+                  <span>이평선 5 10 20 60</span>
+                  <span>{dailyLoading ? "일봉 갱신 중..." : "일봉 차트"}</span>
+                </div>
+              </div>
+
+              <div className="chart-summary-ribbon">
+                <span>시가 {formatPrice(displaySnapshot.open)}</span>
+                <span>고가 {formatPrice(displaySnapshot.high)}</span>
+                <span>저가 {formatPrice(displaySnapshot.low)}</span>
+                <span>거래량 {formatVolume(displaySnapshot.volume)}</span>
+                <span>전일대비 {formatChange(displaySnapshot.change)}</span>
+              </div>
+
+              <HtsChart series={dailySeries} interval="1d" selectedIndex={Math.max(dailySeries.length - 1, 0)} showStudies />
+            </div>
+          </div>
+        </section>
+      );
+    }
+
+    if (activeTopTab === 4) {
+      const maxDepth = Math.max(...orderBook.map((row) => Number(row.quantity || 0)), 1);
+
+      return (
+        <div className="tab-view-stack">
+          <section className="hts-panel">
+            <div className="panel-title">호가잔량 추이</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>구분</th>
+                    <th>호가</th>
+                    <th>잔량</th>
+                    <th>비중</th>
+                    <th>추이</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orderBook.map((row) => (
+                    <tr key={`${row.side}-${row.level}`}>
+                      <td>{row.side === "ask" ? `매도${row.level}` : `매수${row.level}`}</td>
+                      <td className={getSignedClass(row.price - displaySnapshot.previousClose)}>{formatPrice(row.price)}</td>
+                      <td>{formatVolume(row.quantity)}</td>
+                      <td>{((Number(row.quantity || 0) / maxDepth) * 100).toFixed(1)}%</td>
+                      <td>
+                        <div className="depth-bar-track">
+                          <div
+                            className={`depth-bar-fill ${row.side === "ask" ? "ask" : "bid"}`}
+                            style={{ width: `${(Number(row.quantity || 0) / maxDepth) * 100}%` }}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    if (activeTopTab === 5) {
+      return (
+        <div className="tab-view-stack">
+          <section className="hts-panel">
+            <div className="panel-title">당일 / 전일 주가비교</div>
+            <div className="panel-body compact">
+              <table className="hts-table">
+                <thead>
+                  <tr>
+                    <th>항목</th>
+                    <th>당일</th>
+                    <th>전일/평균</th>
+                    <th>비교</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparisonRows.map((row) => (
+                    <tr key={row.label}>
+                      <td>{row.label}</td>
+                      <td>{row.today}</td>
+                      <td>{row.previous}</td>
+                      <td className={row.className}>{row.delta}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      );
+    }
+
+    return (
+      <div className="tab-view-stack">
+        <section className="hts-panel">
+          <div className="panel-title">
+            현재가
+            <span className="panel-title-inline">
+              {selectedStock ? `${selectedStock.symbol} ${normalizeStockName(selectedStock)}` : "-"}
+            </span>
+          </div>
+          <div className="panel-body price-summary">
+            <div className="price-core">
+              <div className="price-code-box">
+                <span className="code-chip">{selectedStock?.symbol}</span>
+                <div className="code-box-text">
+                  <strong>{normalizeStockName(selectedStock)}</strong>
+                  <span>
+                    {MARKET_LABELS[selectedStock?.market] || selectedStock?.market || "KRX"} /{" "}
+                    {selectedStock?.is_watchlist ? "관심종목" : "일반종목"}
+                  </span>
+                </div>
+              </div>
+              <div className="price-block">
+                <strong className={`primary-price ${getSignedClass(displaySnapshot?.change)}`}>
+                  {formatPrice(displaySnapshot?.currentPrice)}
+                </strong>
+                <span className={getSignedClass(displaySnapshot?.change)}>
+                  {formatChange(displaySnapshot?.change)} / {formatPercent(displaySnapshot?.changeRate)}
+                </span>
+              </div>
+            </div>
+
+            <div className="metric-grid">
+              <MetricValue label="시가" value={formatPrice(displaySnapshot?.open)} />
+              <MetricValue label="고가" value={formatPrice(displaySnapshot?.high)} className="is-up" />
+              <MetricValue label="저가" value={formatPrice(displaySnapshot?.low)} className="is-down" />
+              <MetricValue label="전일가" value={formatPrice(displaySnapshot?.previousClose)} />
+              <MetricValue label="거래량" value={formatVolume(displaySnapshot?.volume)} />
+              <MetricValue label="거래대금" value={formatVolume(displaySnapshot?.tradingValue)} />
+            </div>
+          </div>
+        </section>
+
+        <div className="center-split">
+          <section className="hts-panel">
+            <div className="panel-title">호가잔량</div>
+            <div className="panel-body compact">
+              <table className="hts-table orderbook-table">
+                <thead>
+                  <tr>
+                    <th>호가</th>
+                    <th>증감률</th>
+                    <th>잔량</th>
+                    <th>증권사</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orderBook.map((row) => (
+                    <tr key={`${row.side}-${row.level}`} className={row.side === "ask" ? "ask-row" : "bid-row"}>
+                      <td className={getSignedClass(row.price - displaySnapshot.previousClose)}>{formatPrice(row.price)}</td>
+                      <td className={getSignedClass(row.rate)}>{formatPercent(row.rate)}</td>
+                      <td>{formatVolume(row.quantity)}</td>
+                      <td>{row.broker}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="hts-panel">
+            <div className="panel-title">
+              <span>차트</span>
+              <span className="panel-title-inline">
+                {CANDLE_INTERVALS.find((item) => item.value === chartInterval)?.label || chartInterval}
+              </span>
+            </div>
+            <div className="panel-body chart-panel-body">
+              <div className="chart-toolbar">
+                <div className="interval-strip">
+                  {CANDLE_INTERVALS.map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      className={`interval-button ${chartInterval === item.value ? "active" : ""}`}
+                      onClick={() => setChartInterval(item.value)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+                <span className="chart-status">
+                  {chartLoading
+                    ? "차트 불러오는 중..."
+                    : `기준시각 ${activeCandle ? formatCandleTimestamp(activeCandle.timestamp, chartInterval) : "-"}`}
+                </span>
+              </div>
+
+              <div className="candle-metric-grid">
+                <MetricValue
+                  label="기준시각"
+                  value={activeCandle ? formatCandleTimestamp(activeCandle.timestamp, chartInterval) : "-"}
+                />
+                <MetricValue label="시가" value={activeCandle ? formatPrice(activeCandle.open) : "-"} />
+                <MetricValue label="고가" value={activeCandle ? formatPrice(activeCandle.high) : "-"} className="is-up" />
+                <MetricValue label="저가" value={activeCandle ? formatPrice(activeCandle.low) : "-"} className="is-down" />
+                <MetricValue
+                  label="종가"
+                  value={activeCandle ? formatPrice(activeCandle.close) : "-"}
+                  className={getSignedClass(activeCandle ? Number(activeCandle.close) - Number(activeCandle.open) : 0)}
+                />
+                <MetricValue label="거래량" value={activeCandle ? formatVolume(activeCandle.volume) : "-"} />
+              </div>
+
+              <HtsChart
+                series={candles}
+                interval={chartInterval}
+                selectedIndex={selectedCandleIndex}
+                onSelect={setSelectedCandleIndex}
+              />
+            </div>
+          </section>
+        </div>
+
+        <section className="hts-panel">
+          <div className="panel-title">체결 / 시간</div>
+          <div className="panel-body compact">
+            <table className="hts-table trade-tape-table">
+              <thead>
+                <tr>
+                  <th>시간</th>
+                  <th>체결가</th>
+                  <th>대비</th>
+                  <th>매도호가</th>
+                  <th>매수호가</th>
+                  <th>체결량</th>
+                  <th>구분</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tradeTape.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.time}</td>
+                    <td className={getSignedClass(row.change)}>{formatPrice(row.price)}</td>
+                    <td className={getSignedClass(row.change)}>{formatChange(row.change)}</td>
+                    <td className="is-up">{formatPrice(row.sellPrice)}</td>
+                    <td className="is-down">{formatPrice(row.buyPrice)}</td>
+                    <td>{formatVolume(row.quantity)}</td>
+                    <td>{ORDER_SIDE_LABELS[row.side] || row.source}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   if (!token) {
     return (
@@ -548,7 +1649,7 @@ export default function App() {
         <header className="window-title-bar">
           <div className="window-title-left">
             <span className="window-logo">V</span>
-            <span>[0101] 현재가(1)</span>
+            <span>[{displayTopTabCodes[activeTopTab]}] {displayTopTabs[activeTopTab]}</span>
           </div>
           <div className="window-controls">
             <span />
@@ -558,8 +1659,13 @@ export default function App() {
         </header>
 
         <div className="top-tab-strip">
-          {TOP_TABS.map((tab, index) => (
-            <button key={tab} type="button" className={`top-tab ${index === 0 ? "active" : ""}`}>
+          {displayTopTabs.map((tab, index) => (
+            <button
+              key={tab}
+              type="button"
+              className={`top-tab ${activeTopTab === index ? "active" : ""}`}
+              onClick={() => setActiveTopTab(index)}
+            >
               {tab}
             </button>
           ))}
@@ -585,7 +1691,7 @@ export default function App() {
                 placeholder="종목코드/종목명"
               />
             </label>
-            <div className="toolbar-note">공개 시세 API 기준, 7초 자동 갱신 / F5 새로고침 / Alt+1~4 탭 / Alt+B,S 매매</div>
+            <div className="toolbar-note">{toolbarNote}</div>
           </div>
 
           <div className="toolbar-group toolbar-actions">
@@ -607,389 +1713,549 @@ export default function App() {
 
         <div className="hts-grid">
           <aside className="column-left">
-            <section className="hts-panel">
-              <div className="panel-title">종목 리스트</div>
-              <div className="panel-body compact">
-                <table className="hts-table quote-table">
-                  <thead>
-                    <tr>
-                      <th>코드</th>
-                      <th>종목명</th>
-                      <th>현재가</th>
-                      <th>구분</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stockRows.map((stock) => {
-                      const rowSnapshot = buildStockSnapshot(stock);
-                      return (
-                        <tr
-                          key={stock.id}
-                          className={stock.symbol === selectedStock?.symbol ? "selected" : ""}
-                          onClick={() => handleSelectStock(stock)}
-                        >
-                          <td>{stock.symbol}</td>
-                          <td>{normalizeStockName(stock)}</td>
-                          <td className={getSignedClass(rowSnapshot.change)}>{formatPrice(stock.current_price)}</td>
-                          <td>{stock.is_watchlist ? "관심" : stock.market}</td>
+            {isAdmin ? (
+              <>
+                <section className="hts-panel">
+                  <div className="panel-title">실시간 이벤트 큐</div>
+                  <div className="panel-body compact">
+                    <table className="hts-table table-clickable">
+                      <thead>
+                        <tr>
+                          <th>시간</th>
+                          <th>종목</th>
+                          <th>점수</th>
+                          <th>상태</th>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </section>
+                      </thead>
+                      <tbody>
+                        {riskEvents.length ? (
+                          riskEvents.slice(0, 10).map((event) => (
+                            <tr
+                              key={event.id}
+                              className={event.id === selectedRiskEventId ? "selected" : ""}
+                              onClick={() => {
+                                setSelectedRiskEventId(event.id);
+                                setActiveTopTab(0);
+                              }}
+                            >
+                              <td>{formatTime(event.created_at)}</td>
+                              <td>{event.symbol}</td>
+                              <td className={getSignedClass(event.total_score)}>{event.total_score}</td>
+                              <td>{RISK_DECISION_LABELS[event.decision] || event.decision}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan="4">현재 관제 중인 이벤트가 없습니다.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
 
-            <section className="hts-panel">
-              <div className="panel-title">계좌 현황</div>
-              <div className="panel-body metric-box">
-                <MetricValue label="계좌번호" value={portfolio?.account?.account_number || "-"} />
-                <MetricValue label="예수금" value={`${formatPrice(portfolio?.total_cash)} 원`} />
-                <MetricValue label="총자산" value={`${formatPrice(portfolio?.total_asset_value)} 원`} />
-                <MetricValue
-                  label="계좌상태"
-                  value={ACCOUNT_STATUS_LABELS[portfolio?.account?.status] || portfolio?.account?.status || "-"}
-                />
-              </div>
-            </section>
+                <section className="hts-panel">
+                  <div className="panel-title">관제 스냅샷</div>
+                  <div className="panel-body surveillance-summary">
+                    <div className="summary-strip">
+                      {surveillanceSummaryCards.map((card) => (
+                        <article key={card.label} className="summary-card">
+                          <span>{card.label}</span>
+                          <strong className={card.className}>{card.value}</strong>
+                          <small>{card.note}</small>
+                        </article>
+                      ))}
+                    </div>
 
-            <section className="hts-panel">
-              <div className="panel-title">시장 모니터</div>
-              <div className="panel-body summary-strip">
-                {marketStatus.map((item) => (
-                  <article key={item.label} className="summary-card">
-                    <span>{item.label}</span>
-                    <strong>{item.value}</strong>
-                  </article>
-                ))}
-              </div>
-            </section>
+                    <div className="monitor-section-grid">
+                      <section className="monitor-section">
+                        <div className="monitor-section-title">지역 상위</div>
+                        <table className="mini-monitor-table">
+                          <tbody>
+                            {(regionThreatRows.length ? regionThreatRows : [{ region: "정상", count: 0 }]).map((row) => (
+                              <tr key={row.region}>
+                                <th>{row.region}</th>
+                                <td>{row.count}건</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </section>
+
+                      <section className="monitor-section">
+                        <div className="monitor-section-title">디바이스 상위</div>
+                        <table className="mini-monitor-table">
+                          <tbody>
+                            {(deviceThreatRows.length ? deviceThreatRows : [{ device: "정상", count: 0 }]).map((row) => (
+                              <tr key={row.device}>
+                                <th>{row.device}</th>
+                                <td>{row.count}건</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </section>
+
+                      <section className="monitor-section monitor-section-wide">
+                        <div className="monitor-section-title">운영 지표</div>
+                        <table className="mini-monitor-table">
+                          <tbody>
+                            <tr>
+                              <th>관제 계정</th>
+                              <td>{uniqueThreatUsers}명</td>
+                            </tr>
+                            <tr>
+                              <th>잠금 조치</th>
+                              <td>{lockedActionCount}건</td>
+                            </tr>
+                            <tr>
+                              <th>감사 로그</th>
+                              <td>{auditLogs.length}건</td>
+                            </tr>
+                            <tr>
+                              <th>실습 시나리오</th>
+                              <td>{labScenarios.length}종</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </section>
+                    </div>
+                  </div>
+                </section>
+
+                <section className="hts-panel">
+                  <div className="panel-title">시장 참조</div>
+                  <div className="panel-body compact">
+                    <table className="hts-table">
+                      <thead>
+                        <tr>
+                          <th>코드</th>
+                          <th>종목명</th>
+                          <th>현재가</th>
+                          <th>등락률</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {marketReferenceRows.map(({ stock, rowSnapshot }) => (
+                          <tr key={stock.id}>
+                            <td>{stock.symbol}</td>
+                            <td>{normalizeStockName(stock)}</td>
+                            <td className={getSignedClass(rowSnapshot.change)}>{formatPrice(stock.current_price)}</td>
+                            <td className={getSignedClass(rowSnapshot.changeRate)}>{formatPercent(rowSnapshot.changeRate)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              </>
+            ) : (
+              <>
+                <section className="hts-panel">
+                  <div className="panel-title">종목 리스트</div>
+                  <div className="panel-body compact">
+                    <table className="hts-table quote-table">
+                      <thead>
+                        <tr>
+                          <th>코드</th>
+                          <th>종목명</th>
+                          <th>현재가</th>
+                          <th>구분</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stockRows.map((stock) => {
+                          const rowSnapshot = buildStockSnapshot(stock);
+                          return (
+                            <tr
+                              key={stock.id}
+                              className={stock.symbol === selectedStock?.symbol ? "selected" : ""}
+                              onClick={() => handleSelectStock(stock)}
+                            >
+                              <td>{stock.symbol}</td>
+                              <td>{normalizeStockName(stock)}</td>
+                              <td className={getSignedClass(rowSnapshot.change)}>{formatPrice(stock.current_price)}</td>
+                              <td>{stock.is_watchlist ? "관심" : stock.market}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section className="hts-panel">
+                  <div className="panel-title">계좌 현황</div>
+                  <div className="panel-body metric-box">
+                    <MetricValue label="계좌번호" value={portfolio?.account?.account_number || "-"} />
+                    <MetricValue label="예수금" value={`${formatPrice(portfolio?.total_cash)} 원`} />
+                    <MetricValue label="총자산" value={`${formatPrice(portfolio?.total_asset_value)} 원`} />
+                    <MetricValue
+                      label="계좌상태"
+                      value={ACCOUNT_STATUS_LABELS[portfolio?.account?.status] || portfolio?.account?.status || "-"}
+                    />
+                  </div>
+                </section>
+
+                <section className="hts-panel">
+                  <div className="panel-title">시장 모니터</div>
+                  <div className="panel-body market-monitor-board">
+                    <div className="monitor-index-strip">
+                      {marketIndices.map((index) => (
+                        <article key={index.label} className="index-tile">
+                          <span>{index.label}</span>
+                          <strong>
+                            {Number(index.value).toLocaleString("ko-KR", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </strong>
+                          <em className={getSignedClass(index.changeRate)}>{formatPercent(index.changeRate)}</em>
+                          <small>{index.summary}</small>
+                        </article>
+                      ))}
+                    </div>
+                    <div className="monitor-section-grid">
+                      <section className="monitor-section">
+                        <div className="monitor-section-title">계좌 / 손익</div>
+                        <table className="mini-monitor-table">
+                          <tbody>
+                            {accountMonitorRows.map((row) => (
+                              <tr key={row.label}>
+                                <th>{row.label}</th>
+                                <td className={row.className}>{row.value}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </section>
+
+                      <section className="monitor-section">
+                        <div className="monitor-section-title">주문 / FDS</div>
+                        <table className="mini-monitor-table">
+                          <tbody>
+                            {opsMonitorRows.map((row) => (
+                              <tr key={row.label}>
+                                <th>{row.label}</th>
+                                <td className={row.className}>{row.value}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </section>
+
+                      <section className="monitor-section monitor-section-wide">
+                        <div className="monitor-section-title">단축키</div>
+                        <table className="mini-monitor-table">
+                          <tbody>
+                            {shortcutRows.map((row) => (
+                              <tr key={row.key}>
+                                <th>{row.key}</th>
+                                <td>{row.action}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </section>
+                    </div>
+                  </div>
+                </section>
+              </>
+            )}
           </aside>
 
-          <section className="column-center">
-            <section className="hts-panel">
-              <div className="panel-title">
-                현재가
-                <span className="panel-title-inline">
-                  {selectedStock ? `${selectedStock.symbol} ${normalizeStockName(selectedStock)}` : "-"}
-                </span>
-              </div>
-              <div className="panel-body price-summary">
-                <div className="price-core">
-                  <div className="price-code-box">
-                    <span className="code-chip">{selectedStock?.symbol}</span>
-                    <div className="code-box-text">
-                      <strong>{normalizeStockName(selectedStock)}</strong>
-                      <span>
-                        {MARKET_LABELS[selectedStock?.market] || selectedStock?.market || "KRX"} /{" "}
-                        {selectedStock?.is_watchlist ? "관심종목" : "일반종목"}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="price-block">
-                    <strong className={`primary-price ${getSignedClass(displaySnapshot?.change)}`}>
-                      {formatPrice(displaySnapshot?.currentPrice)}
-                    </strong>
-                    <span className={getSignedClass(displaySnapshot?.change)}>
-                      {formatChange(displaySnapshot?.change)} / {formatPercent(displaySnapshot?.changeRate)}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="metric-grid">
-                  <MetricValue label="시가" value={formatPrice(displaySnapshot?.open)} />
-                  <MetricValue label="고가" value={formatPrice(displaySnapshot?.high)} className="is-up" />
-                  <MetricValue label="저가" value={formatPrice(displaySnapshot?.low)} className="is-down" />
-                  <MetricValue label="전일가" value={formatPrice(displaySnapshot?.previousClose)} />
-                  <MetricValue label="거래량" value={formatVolume(displaySnapshot?.volume)} />
-                  <MetricValue label="거래대금" value={formatVolume(displaySnapshot?.tradingValue)} />
-                </div>
-              </div>
-            </section>
-
-            <div className="center-split">
-              <section className="hts-panel">
-                <div className="panel-title">호가잔량</div>
-                <div className="panel-body compact">
-                  <table className="hts-table orderbook-table">
-                    <thead>
-                      <tr>
-                        <th>호가</th>
-                        <th>증감률</th>
-                        <th>잔량</th>
-                        <th>증권사</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {orderBook.map((row) => (
-                        <tr key={`${row.side}-${row.level}`} className={row.side === "ask" ? "ask-row" : "bid-row"}>
-                          <td className={getSignedClass(row.price - displaySnapshot.previousClose)}>{formatPrice(row.price)}</td>
-                          <td className={getSignedClass(row.rate)}>{formatPercent(row.rate)}</td>
-                          <td>{formatVolume(row.quantity)}</td>
-                          <td>{row.broker}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-
-              <section className="hts-panel">
-                <div className="panel-title">
-                  <span>차트</span>
-                  <span className="panel-title-inline">
-                    {CANDLE_INTERVALS.find((item) => item.value === chartInterval)?.label || chartInterval}
-                  </span>
-                </div>
-                <div className="panel-body chart-panel-body">
-                  <div className="chart-toolbar">
-                    <div className="interval-strip">
-                      {CANDLE_INTERVALS.map((item) => (
-                        <button
-                          key={item.value}
-                          type="button"
-                          className={`interval-button ${chartInterval === item.value ? "active" : ""}`}
-                          onClick={() => setChartInterval(item.value)}
-                        >
-                          {item.label}
-                        </button>
-                      ))}
-                    </div>
-                    <span className="chart-status">
-                      {chartLoading
-                        ? "차트 불러오는 중..."
-                        : `기준시각 ${activeCandle ? formatCandleTimestamp(activeCandle.timestamp, chartInterval) : "-"}`}
-                    </span>
-                  </div>
-
-                  <div className="candle-metric-grid">
-                    <MetricValue
-                      label="기준시각"
-                      value={activeCandle ? formatCandleTimestamp(activeCandle.timestamp, chartInterval) : "-"}
-                    />
-                    <MetricValue label="시가" value={activeCandle ? formatPrice(activeCandle.open) : "-"} />
-                    <MetricValue label="고가" value={activeCandle ? formatPrice(activeCandle.high) : "-"} className="is-up" />
-                    <MetricValue label="저가" value={activeCandle ? formatPrice(activeCandle.low) : "-"} className="is-down" />
-                    <MetricValue
-                      label="종가"
-                      value={activeCandle ? formatPrice(activeCandle.close) : "-"}
-                      className={getSignedClass(activeCandle ? Number(activeCandle.close) - Number(activeCandle.open) : 0)}
-                    />
-                    <MetricValue label="거래량" value={activeCandle ? formatVolume(activeCandle.volume) : "-"} />
-                  </div>
-
-                  <HtsChart
-                    series={candles}
-                    interval={chartInterval}
-                    selectedIndex={selectedCandleIndex}
-                    onSelect={setSelectedCandleIndex}
-                  />
-                </div>
-              </section>
-            </div>
-
-            <section className="hts-panel">
-              <div className="panel-title">체결 / 시간</div>
-              <div className="panel-body compact">
-                <table className="hts-table trade-tape-table">
-                  <thead>
-                    <tr>
-                      <th>시간</th>
-                      <th>체결가</th>
-                      <th>대비</th>
-                      <th>매도호가</th>
-                      <th>매수호가</th>
-                      <th>체결량</th>
-                      <th>구분</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tradeTape.map((row) => (
-                      <tr key={row.id}>
-                        <td>{row.time}</td>
-                        <td className={getSignedClass(row.change)}>{formatPrice(row.price)}</td>
-                        <td className={getSignedClass(row.change)}>{formatChange(row.change)}</td>
-                        <td className="is-up">{formatPrice(row.sellPrice)}</td>
-                        <td className="is-down">{formatPrice(row.buyPrice)}</td>
-                        <td>{formatVolume(row.quantity)}</td>
-                        <td>{ORDER_SIDE_LABELS[row.side] || row.source}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          </section>
+          <section className="column-center">{renderCenterView()}</section>
 
           <aside className="column-right">
-            <section className="hts-panel">
-              <div className="panel-title">주문</div>
-              <div className="panel-body">
-                <form className="order-entry-grid" onSubmit={handleSubmitOrder}>
-                  <label className="inline-field vertical">
-                    <span>계좌</span>
-                    <input value={portfolio?.account?.account_number || ""} disabled />
-                  </label>
-                  <label className="inline-field vertical">
-                    <span>종목</span>
-                    <input value={selectedStock ? `${selectedStock.symbol} ${normalizeStockName(selectedStock)}` : ""} disabled />
-                  </label>
-                  <label className="inline-field vertical">
-                    <span>매매구분</span>
-                    <select
-                      value={orderForm.side}
-                      onChange={(event) => setOrderForm((current) => ({ ...current, side: event.target.value }))}
-                    >
-                      <option value="BUY">매수</option>
-                      <option value="SELL">매도</option>
-                    </select>
-                  </label>
-                  <label className="inline-field vertical">
-                    <span>주문유형</span>
-                    <select
-                      value={orderForm.order_type}
-                      onChange={(event) =>
-                        setOrderForm((current) => ({
-                          ...current,
-                          order_type: event.target.value,
-                          price:
-                            event.target.value === "LIMIT" && selectedStock
-                              ? String(Number(selectedStock.current_price))
-                              : current.price,
-                        }))
-                      }
-                    >
-                      <option value="MARKET">시장가</option>
-                      <option value="LIMIT">지정가</option>
-                    </select>
-                  </label>
-                  <label className="inline-field vertical">
-                    <span>수량</span>
-                    <input
-                      type="number"
-                      min="1"
-                      value={orderForm.quantity}
-                      onChange={(event) => setOrderForm((current) => ({ ...current, quantity: event.target.value }))}
-                    />
-                  </label>
-                  <label className="inline-field vertical">
-                    <span>가격</span>
-                    <input
-                      type={orderForm.order_type === "MARKET" ? "text" : "number"}
-                      min="0"
-                      step="1"
-                      disabled={orderForm.order_type === "MARKET"}
-                      value={
-                        orderForm.order_type === "MARKET"
-                          ? `${formatPrice(displaySnapshot?.currentPrice)} (시장가)`
-                          : orderForm.price
-                      }
-                      onChange={(event) => setOrderForm((current) => ({ ...current, price: event.target.value }))}
-                    />
-                  </label>
-                  <label className="inline-field vertical">
-                    <span>접속지역</span>
-                    <select
-                      value={orderForm.region}
-                      onChange={(event) => setOrderForm((current) => ({ ...current, region: event.target.value }))}
-                    >
-                      {Object.entries(REGION_LABELS).map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <p className="info-note">
-                    해외 지역이나 신규 기기에서 대량 주문을 넣으면 FDS 규칙이 즉시 점수를 부여하고 관리자 검토로 넘깁니다.
-                  </p>
-                  <div className="order-button-row">
-                    <button
-                      type="button"
-                      className="order-action-button buy"
-                      onClick={() => setOrderForm((current) => ({ ...current, side: "BUY" }))}
-                    >
-                      매수
-                    </button>
-                    <button
-                      type="button"
-                      className="order-action-button sell"
-                      onClick={() => setOrderForm((current) => ({ ...current, side: "SELL" }))}
-                    >
-                      매도
-                    </button>
-                    <button type="submit" className="order-submit-button" disabled={loading || !selectedStock}>
-                      {ORDER_SIDE_LABELS[orderForm.side]} 주문
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </section>
-
-            <section className="hts-panel">
-              <div className="panel-title">투자자별 동향</div>
-              <div className="panel-body compact">
-                <table className="hts-table investor-table">
-                  <thead>
-                    <tr>
-                      <th>구분</th>
-                      <th>매도</th>
-                      <th>매수</th>
-                      <th>순매수</th>
-                      <th>비중</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {investorFlows.map((row) => (
-                      <tr key={row.name}>
-                        <td>{row.name}</td>
-                        <td>{formatVolume(row.sell)}</td>
-                        <td>{formatVolume(row.buy)}</td>
-                        <td className={getSignedClass(row.net)}>{formatChange(row.net)}</td>
-                        <td>{row.ratio.toFixed(2)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-
-            <section className="hts-panel">
-              <div className="panel-title">FDS 감시</div>
-              <div className="panel-body risk-stack">
-                {riskRows.length ? (
-                  riskRows.map((row) => (
-                    <article key={row.id} className="risk-card">
-                      <div className="risk-card-header">
-                        <strong>{row.symbol}</strong>
-                        <ValuePill value={RISK_SEVERITY_LABELS[row.severity] || row.severity} variant="risk" />
-                      </div>
-                      <div className="risk-card-meta">
-                        <span>점수 {row.total_score}</span>
-                        <span>{RISK_DECISION_LABELS[row.decision] || row.decision}</span>
-                        <span>{RISK_STATUS_LABELS[row.status] || ORDER_STATUS_LABELS[row.status] || row.status}</span>
-                      </div>
-                      <p>{row.summary || "주문 감시 이벤트"}</p>
-                      {user?.role === "ADMIN" ? (
-                        <div className="risk-card-actions">
-                          <button type="button" onClick={() => handleAdminAction(row.id, "APPROVE")}>
+            {isAdmin ? (
+              <>
+                <section className="hts-panel">
+                  <div className="panel-title">대응 콘솔</div>
+                  <div className="panel-body risk-stack">
+                    {selectedRiskSummary ? (
+                      <article className="risk-card">
+                        <div className="risk-card-header">
+                          <strong>{selectedRiskSummary.symbol}</strong>
+                          <ValuePill
+                            value={RISK_SEVERITY_LABELS[selectedRiskSummary.severity] || selectedRiskSummary.severity}
+                            variant="risk"
+                          />
+                        </div>
+                        <div className="risk-card-meta">
+                          <span>점수 {selectedRiskSummary.total_score}</span>
+                          <span>{RISK_DECISION_LABELS[selectedRiskSummary.decision] || selectedRiskSummary.decision}</span>
+                          <span>{RISK_STATUS_LABELS[selectedRiskSummary.status] || selectedRiskSummary.status}</span>
+                        </div>
+                        <div className="risk-card-meta">
+                          <span>{REGION_LABELS[selectedRiskSummary.region] || selectedRiskSummary.region}</span>
+                          <span>{selectedRiskSummary.device_id}</span>
+                          <span>주문 {shortId(selectedRiskSummary.order_id)}</span>
+                        </div>
+                        <p>{selectedRiskSummary.summary}</p>
+                        <div className="risk-card-actions risk-card-actions-admin">
+                          <button type="button" onClick={() => handleAdminAction(selectedRiskSummary.id, "APPROVE")}>
                             승인
                           </button>
-                          <button type="button" onClick={() => handleAdminAction(row.id, "BLOCK")}>
+                          <button type="button" onClick={() => handleAdminAction(selectedRiskSummary.id, "BLOCK")}>
                             차단
                           </button>
-                          <button type="button" onClick={() => handleAdminAction(row.id, "REQUEST_ADDITIONAL_AUTH")}>
+                          <button
+                            type="button"
+                            onClick={() => handleAdminAction(selectedRiskSummary.id, "REQUEST_ADDITIONAL_AUTH")}
+                          >
                             추가인증
                           </button>
+                          <button type="button" onClick={() => handleAdminAction(selectedRiskSummary.id, "LOCK_ACCOUNT")}>
+                            계정잠금
+                          </button>
+                          <button type="button" onClick={() => handleAdminAction(selectedRiskSummary.id, "UNLOCK_ACCOUNT")}>
+                            잠금해제
+                          </button>
                         </div>
-                      ) : null}
-                    </article>
-                  ))
-                ) : (
-                  <div className="empty-box">현재 선택 종목에 대한 감시 이벤트가 없습니다.</div>
-                )}
-              </div>
-            </section>
+                      </article>
+                    ) : (
+                      <div className="empty-box">선택된 위험 이벤트가 없습니다.</div>
+                    )}
+                  </div>
+                </section>
+
+                <section className="hts-panel">
+                  <div className="panel-title">연관 엔터티</div>
+                  <div className="panel-body compact">
+                    <table className="hts-table">
+                      <tbody>
+                        {selectedEntityRows.length ? (
+                          selectedEntityRows.map((row) => (
+                            <tr key={row.label}>
+                              <th>{row.label}</th>
+                              <td>{row.value}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan="2">선택된 이벤트의 엔터티 정보가 없습니다.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section className="hts-panel">
+                  <div className="panel-title">즉시 대응 포인트</div>
+                  <div className="panel-body compact">
+                    <table className="hts-table">
+                      <thead>
+                        <tr>
+                          <th>룰</th>
+                          <th>점수</th>
+                          <th>사유</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {responseGuideRows.length ? (
+                          responseGuideRows.map((row) => (
+                            <tr key={row.id}>
+                              <td>{row.rule_name}</td>
+                              <td>{row.score}</td>
+                              <td>{row.reason}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan="3">선택된 이벤트의 룰 히트가 없습니다.</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section className="hts-panel">
+                  <div className="panel-title">운영 메모</div>
+                  <div className="panel-body compact">
+                    <table className="hts-table">
+                      <tbody>
+                        <tr>
+                          <th>현재 큐</th>
+                          <td>{riskEvents.length}건</td>
+                        </tr>
+                        <tr>
+                          <th>관련 감사 로그</th>
+                          <td>{relatedAuditLogs.length}건</td>
+                        </tr>
+                        <tr>
+                          <th>룰 카탈로그</th>
+                          <td>{ruleCatalog.length}종</td>
+                        </tr>
+                        <tr>
+                          <th>최근 실습</th>
+                          <td>{lastLabExecution?.scenario_code || "없음"}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              </>
+            ) : (
+              <>
+                <section className="hts-panel">
+                  <div className="panel-title">주문</div>
+                  <div className="panel-body">
+                    <form className="order-entry-grid" onSubmit={handleSubmitOrder}>
+                      <label className="inline-field vertical">
+                        <span>계좌</span>
+                        <input value={portfolio?.account?.account_number || ""} disabled />
+                      </label>
+                      <label className="inline-field vertical">
+                        <span>종목</span>
+                        <input value={selectedStock ? `${selectedStock.symbol} ${normalizeStockName(selectedStock)}` : ""} disabled />
+                      </label>
+                      <label className="inline-field vertical">
+                        <span>매매구분</span>
+                        <select
+                          value={orderForm.side}
+                          onChange={(event) => setOrderForm((current) => ({ ...current, side: event.target.value }))}
+                        >
+                          <option value="BUY">매수</option>
+                          <option value="SELL">매도</option>
+                        </select>
+                      </label>
+                      <label className="inline-field vertical">
+                        <span>주문유형</span>
+                        <select
+                          value={orderForm.order_type}
+                          onChange={(event) =>
+                            setOrderForm((current) => ({
+                              ...current,
+                              order_type: event.target.value,
+                              price:
+                                event.target.value === "LIMIT" && selectedStock
+                                  ? String(Number(selectedStock.current_price))
+                                  : current.price,
+                            }))
+                          }
+                        >
+                          <option value="MARKET">시장가</option>
+                          <option value="LIMIT">지정가</option>
+                        </select>
+                      </label>
+                      <label className="inline-field vertical">
+                        <span>수량</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={orderForm.quantity}
+                          onChange={(event) => setOrderForm((current) => ({ ...current, quantity: event.target.value }))}
+                        />
+                      </label>
+                      <label className="inline-field vertical">
+                        <span>가격</span>
+                        <input
+                          type={orderForm.order_type === "MARKET" ? "text" : "number"}
+                          min="0"
+                          step="1"
+                          disabled={orderForm.order_type === "MARKET"}
+                          value={
+                            orderForm.order_type === "MARKET"
+                              ? `${formatPrice(displaySnapshot?.currentPrice)} (시장가)`
+                              : orderForm.price
+                          }
+                          onChange={(event) => setOrderForm((current) => ({ ...current, price: event.target.value }))}
+                        />
+                      </label>
+                      <label className="inline-field vertical">
+                        <span>접속지역</span>
+                        <select
+                          value={orderForm.region}
+                          onChange={(event) => setOrderForm((current) => ({ ...current, region: event.target.value }))}
+                        >
+                          {Object.entries(REGION_LABELS).map(([value, label]) => (
+                            <option key={value} value={value}>
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <p className="info-note">
+                        해외 지역이나 신규 기기에서 대량 주문을 넣으면 FDS 규칙이 즉시 점수를 부여하고 관리자 검토로 넘깁니다.
+                      </p>
+                      <div className="order-button-row">
+                        <button
+                          type="button"
+                          className="order-action-button buy"
+                          onClick={() => setOrderForm((current) => ({ ...current, side: "BUY" }))}
+                        >
+                          매수
+                        </button>
+                        <button
+                          type="button"
+                          className="order-action-button sell"
+                          onClick={() => setOrderForm((current) => ({ ...current, side: "SELL" }))}
+                        >
+                          매도
+                        </button>
+                        <button type="submit" className="order-submit-button" disabled={loading || !selectedStock}>
+                          {ORDER_SIDE_LABELS[orderForm.side]} 주문
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </section>
+
+                <section className="hts-panel">
+                  <div className="panel-title">투자자별 동향</div>
+                  <div className="panel-body compact">
+                    <table className="hts-table investor-table">
+                      <thead>
+                        <tr>
+                          <th>구분</th>
+                          <th>매도</th>
+                          <th>매수</th>
+                          <th>순매수</th>
+                          <th>비중</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {investorFlows.map((row) => (
+                          <tr key={row.name}>
+                            <td>{row.name}</td>
+                            <td>{formatVolume(row.sell)}</td>
+                            <td>{formatVolume(row.buy)}</td>
+                            <td className={getSignedClass(row.net)}>{formatChange(row.net)}</td>
+                            <td>{row.ratio.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section className="hts-panel">
+                  <div className="panel-title">FDS 감시</div>
+                  <div className="panel-body risk-stack">
+                    {riskRows.length ? (
+                      riskRows.map((row) => (
+                        <article key={row.id} className="risk-card">
+                          <div className="risk-card-header">
+                            <strong>{row.symbol}</strong>
+                            <ValuePill value={RISK_SEVERITY_LABELS[row.severity] || row.severity} variant="risk" />
+                          </div>
+                          <div className="risk-card-meta">
+                            <span>점수 {row.total_score}</span>
+                            <span>{RISK_DECISION_LABELS[row.decision] || row.decision}</span>
+                            <span>{RISK_STATUS_LABELS[row.status] || ORDER_STATUS_LABELS[row.status] || row.status}</span>
+                          </div>
+                          <p>{row.summary || "주문 감시 이벤트"}</p>
+                        </article>
+                      ))
+                    ) : (
+                      <div className="empty-box">현재 선택 종목에 대한 감시 이벤트가 없습니다.</div>
+                    )}
+                  </div>
+                </section>
+              </>
+            )}
           </aside>
         </div>
 
