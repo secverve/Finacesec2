@@ -316,15 +316,15 @@ export function buildTradeTape(stock, orders, snapshot) {
     .slice(0, 10)
     .map((order, index) => ({
       id: order.id,
-      time: formatTime(order.created_at),
+      time: formatTime(order.last_execution_at || order.created_at),
       price: Number(order.executed_price || order.price || snapshot.currentPrice),
-      change: snapshot.change,
+      change: Number(order.executed_price || order.price || snapshot.currentPrice) - snapshot.previousClose,
       sellPrice: Number(order.executed_price || order.price || snapshot.currentPrice) + snapshot.tick,
       buyPrice: Number(order.executed_price || order.price || snapshot.currentPrice) - snapshot.tick,
       quantity: order.executed_quantity || order.quantity,
       side: order.side,
       status: ORDER_STATUS_LABELS[order.status] || order.status,
-      source: index % 2 === 0 ? "체결" : "주문",
+      source: order.status === "EXECUTED" ? "체결" : index % 2 === 0 ? "주문" : "대기",
     }));
 
   if (liveOrders.length >= 6) {

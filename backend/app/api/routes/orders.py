@@ -10,7 +10,7 @@ from app.fds.types import RequestContext
 from app.models.order import Order
 from app.models.user import User
 from app.schemas.order import OrderCreateRequest, OrderResponse
-from app.services.order_service import cancel_order, create_order, list_orders
+from app.services.order_service import cancel_order, create_order, list_orders, sync_open_orders_for_user
 
 router = APIRouter()
 
@@ -19,6 +19,7 @@ def serialize_order(order: Order) -> OrderResponse:
     risk_event = order.risk_event
     risk_severity = risk_event.severity if risk_event else RiskSeverity.NORMAL
     risk_decision = risk_event.decision if risk_event else RiskDecision.ALLOW
+    last_execution = max(order.executions, key=lambda execution: execution.executed_at, default=None)
     return OrderResponse(
         id=order.id,
         symbol=order.stock.symbol,
@@ -30,9 +31,11 @@ def serialize_order(order: Order) -> OrderResponse:
         price=order.price,
         executed_price=order.executed_price,
         executed_quantity=order.executed_quantity,
+        remaining_quantity=max(order.quantity - order.executed_quantity, 0),
         fds_score=order.fds_score,
         risk_severity=risk_severity,
         risk_decision=risk_decision,
+        last_execution_at=last_execution.executed_at if last_execution else None,
         created_at=order.created_at,
     )
 
@@ -41,7 +44,10 @@ def serialize_order(order: Order) -> OrderResponse:
 def get_orders(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
+    request_context: Annotated[RequestContext, Depends(get_request_context)],
 ) -> list[OrderResponse]:
+    sync_open_orders_for_user(db, current_user, request_context)
+    db.commit()
     orders = list_orders(db, current_user)
     return [serialize_order(order) for order in orders]
 
@@ -70,4 +76,3 @@ def cancel_existing_order(
     db.commit()
     db.refresh(order)
     return serialize_order(order)
-

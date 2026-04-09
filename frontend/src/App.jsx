@@ -227,11 +227,9 @@ export default function App() {
 
     try {
       const me = await api.getMe(activeToken, deviceId);
-      const [stockList, portfolioSnapshot, orderList] = await Promise.all([
-        api.listStocks(),
-        api.getPortfolio(activeToken, deviceId),
-        api.listOrders(activeToken, deviceId),
-      ]);
+      const stockList = await api.listStocks();
+      const orderList = await api.listOrders(activeToken, deviceId);
+      const portfolioSnapshot = await api.getPortfolio(activeToken, deviceId);
 
       let adminData = { riskEvents: [], auditLogs: [] };
       if (me.role === "ADMIN") {
@@ -1019,6 +1017,7 @@ export default function App() {
                     <th>구분</th>
                     <th>주문유형</th>
                     <th>수량</th>
+                    <th>미체결</th>
                     <th>상태</th>
                     <th>체결가</th>
                     <th>FDS</th>
@@ -1032,6 +1031,7 @@ export default function App() {
                       <td>{ORDER_SIDE_LABELS[order.side] || order.side}</td>
                       <td>{ORDER_TYPE_LABELS[order.order_type] || order.order_type}</td>
                       <td>{formatVolume(order.quantity)}</td>
+                      <td>{formatVolume(order.remaining_quantity)}</td>
                       <td>{ORDER_STATUS_LABELS[order.status] || order.status}</td>
                       <td>{order.executed_price ? formatPrice(order.executed_price) : "-"}</td>
                       <td className={getSignedClass(order.fds_score)}>{order.fds_score}</td>

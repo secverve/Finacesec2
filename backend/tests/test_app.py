@@ -55,8 +55,66 @@ def test_market_order_executes_for_normal_user(client: TestClient) -> None:
     assert order_response.status_code == 201, order_response.text
     payload = order_response.json()
     assert payload["status"] == "EXECUTED"
+    assert payload["remaining_quantity"] == 0
     assert payload["fds_score"] == 0
     assert payload["risk_decision"] == "ALLOW"
+
+
+def test_limit_order_executes_when_market_moves(client: TestClient, monkeypatch) -> None:
+    import app.services.market_data as market_data_module
+
+    token = login(client, "trader@verve.local", "Trader1234!", device_id="swing-device")
+    portfolio_response = client.get("/api/v1/portfolio/me", headers=build_headers(token, "swing-device"))
+    account_id = portfolio_response.json()["account"]["id"]
+    limit_price = 100
+
+    accepted_order_response = client.post(
+        "/api/v1/orders",
+        json={
+            "account_id": account_id,
+            "symbol": "005930",
+            "side": "BUY",
+            "order_type": "LIMIT",
+            "quantity": 1,
+            "price": limit_price,
+        },
+        headers=build_headers(token, "swing-device"),
+    )
+    assert accepted_order_response.status_code == 201, accepted_order_response.text
+    accepted_order = accepted_order_response.json()
+    assert accepted_order["status"] == "ACCEPTED"
+    assert accepted_order["remaining_quantity"] == 1
+
+    def fake_live_quote(stock):
+        return {
+            "id": stock.id,
+            "symbol": stock.symbol,
+            "name": stock.name,
+            "market": stock.market,
+            "price": "90",
+            "current_price": "90",
+            "previous_close": "120",
+            "open": "110",
+            "day_high": "125",
+            "day_low": "80",
+            "volume": 123456,
+            "is_watchlist": stock.is_watchlist,
+        }
+
+    monkeypatch.setattr(market_data_module, "fetch_live_quote", fake_live_quote)
+
+    refreshed_orders_response = client.get("/api/v1/orders", headers=build_headers(token, "swing-device"))
+    assert refreshed_orders_response.status_code == 200, refreshed_orders_response.text
+    refreshed_order = next(order for order in refreshed_orders_response.json() if order["id"] == accepted_order["id"])
+    assert refreshed_order["status"] == "EXECUTED"
+    assert refreshed_order["executed_quantity"] == 1
+    assert refreshed_order["remaining_quantity"] == 0
+    assert refreshed_order["last_execution_at"] is not None
+
+    updated_portfolio_response = client.get("/api/v1/portfolio/me", headers=build_headers(token, "swing-device"))
+    assert updated_portfolio_response.status_code == 200, updated_portfolio_response.text
+    holding = next(item for item in updated_portfolio_response.json()["holdings"] if item["symbol"] == "005930")
+    assert holding["quantity"] >= 1
 
 
 def test_admin_can_approve_blocked_risk_event(client: TestClient) -> None:

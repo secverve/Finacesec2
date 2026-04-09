@@ -33,9 +33,11 @@ class OrderResponse(BaseModel):
     price: Decimal | None
     executed_price: Decimal | None
     executed_quantity: int
+    remaining_quantity: int
     fds_score: int
     risk_severity: RiskSeverity
     risk_decision: RiskDecision
+    last_execution_at: datetime | None
     created_at: datetime
 
 
@@ -46,4 +48,3 @@ class ExecutionResponse(BaseModel):
     quantity: int
     price: Decimal
     executed_at: datetime
-
