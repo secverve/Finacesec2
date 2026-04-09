@@ -44,6 +44,12 @@ export const api = {
   listStocks() {
     return request("/market/stocks");
   },
+  getQuote(symbol) {
+    return request(`/market/quote/${symbol}`);
+  },
+  getCandles(symbol, interval = "1m", limit = 80) {
+    return request(`/market/candles/${symbol}?interval=${interval}&limit=${limit}`);
+  },
   getPortfolio(token, deviceId) {
     return request("/portfolio/me", { token, deviceId });
   },
@@ -64,6 +70,16 @@ export const api = {
       method: "POST",
       token,
       body,
+      deviceId,
+    });
+  },
+  listLabScenarios(token, deviceId) {
+    return request("/admin/lab/scenarios", { token, deviceId });
+  },
+  executeLabScenario(token, scenarioCode, deviceId) {
+    return request(`/admin/lab/scenarios/${scenarioCode}/execute`, {
+      method: "POST",
+      token,
       deviceId,
     });
   },

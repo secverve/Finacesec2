@@ -1,4 +1,5 @@
 from typing import Annotated
+from uuid import uuid4
 
 import jwt
 from fastapi import Depends, HTTPException, Request, status
@@ -19,7 +20,15 @@ def get_request_context(request: Request) -> RequestContext:
     client_host = forwarded_for.split(",")[0].strip() or (request.client.host if request.client else "unknown")
     region = request.headers.get("x-region", "KR").upper()
     device_id = request.headers.get("x-device-id", "web-client")
-    return RequestContext(ip_address=client_host, region=region, device_id=device_id)
+    request_id = request.headers.get("x-request-id") or getattr(request.state, "request_id", "") or str(uuid4())
+    channel = request.headers.get("x-client-channel", "web").lower()
+    return RequestContext(
+        ip_address=client_host,
+        region=region,
+        device_id=device_id,
+        request_id=request_id,
+        channel=channel,
+    )
 
 
 def get_current_user(
@@ -44,4 +53,3 @@ def get_admin_user(current_user: Annotated[User, Depends(get_current_user)]) -> 
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return current_user
-

@@ -262,6 +262,17 @@ button {
   background: #fff;
 }
 
+.toolbar-note {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 11px;
+  color: #20476f;
+  border: 1px solid #9fb1c6;
+  background: linear-gradient(180deg, #f7fbff, #dce8f6);
+}
+
 .inline-field {
   display: flex;
   align-items: center;
@@ -350,6 +361,12 @@ button {
   justify-content: flex-start;
 }
 
+.code-box-text {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+
 .code-chip {
   display: inline-grid;
   place-items: center;
@@ -371,6 +388,29 @@ button {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px 14px;
+}
+
+.summary-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.summary-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #bfc6cf;
+  background: linear-gradient(180deg, #ffffff, #eef2f6);
+  font-size: 12px;
+}
+
+.summary-card strong {
+  font-size: 18px;
+}
+
+.panel-title-inline {
+  color: var(--muted);
 }
 
 .hts-table {
@@ -420,6 +460,17 @@ button {
 
 .order-entry-grid .inline-field:last-of-type {
   grid-column: span 2;
+}
+
+.info-note {
+  grid-column: span 2;
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #32506e;
+  border: 1px solid #b7c4d2;
+  background: linear-gradient(180deg, #f7fbff, #e8f0f8);
 }
 
 .order-button-row {
@@ -477,14 +528,62 @@ button {
   color: #765800;
 }
 
+.value-pill-neutral {
+  border-color: #91a3b6;
+  background: #edf2f7;
+  color: #344255;
+}
+
 .chart-panel-body {
   padding: 8px;
   background: #fff;
 }
 
+.chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.interval-strip {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.interval-button,
+.lab-execute-button {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  border: 1px solid #8d95a1;
+  background: linear-gradient(180deg, #ffffff, #dbe1e8);
+}
+
+.interval-button.active {
+  font-weight: 700;
+  color: #fff;
+  border-color: #165392;
+  background: linear-gradient(180deg, #4687ca, #2364ad);
+}
+
+.chart-status {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.candle-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin-bottom: 8px;
+}
+
 .hts-chart-svg {
   width: 100%;
-  height: 210px;
+  height: 300px;
   background: linear-gradient(180deg, #fff, #f2f4f7);
   border: 1px solid #ccd1d8;
 }
@@ -492,6 +591,35 @@ button {
 .chart-grid-line {
   stroke: #d8dde4;
   stroke-width: 1;
+}
+
+.chart-axis-text {
+  fill: #6d7580;
+  font-size: 10px;
+}
+
+.chart-selection {
+  fill: rgba(88, 129, 196, 0.1);
+}
+
+.chart-candle-group {
+  cursor: pointer;
+}
+
+.chart-price-line {
+  stroke: #7a8ea6;
+  stroke-width: 1;
+  stroke-dasharray: 4 2;
+}
+
+.chart-price-tag {
+  fill: #344255;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.chart-volume {
+  opacity: 0.45;
 }
 
 .chart-wick.up,
@@ -518,6 +646,58 @@ button {
   margin-top: 6px;
   font-size: 11px;
   color: var(--muted);
+}
+
+.table-clickable tbody tr {
+  cursor: pointer;
+}
+
+.table-clickable tbody tr.selected {
+  background: #dce8fa;
+}
+
+.audit-summary-cell {
+  color: #465364;
+}
+
+.lab-grid {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.lab-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #bcc2ca;
+  background: linear-gradient(180deg, #ffffff, #eef2f6);
+}
+
+.lab-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.lab-card-header p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.lab-card-meta {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: #465364;
+}
+
+.lab-execute-button {
+  justify-self: start;
+  min-width: 120px;
+  font-weight: 700;
 }
 
 .empty-box {
@@ -554,12 +734,22 @@ button {
   }
 
   .metric-grid,
-  .order-entry-grid {
+  .order-entry-grid,
+  .candle-metric-grid,
+  .summary-strip {
     grid-template-columns: 1fr;
   }
 
   .order-entry-grid .inline-field:last-of-type,
   .order-button-row {
     grid-column: span 1;
+  }
+
+  .info-note,
+  .chart-toolbar,
+  .lab-card-header {
+    grid-column: span 1;
+    flex-direction: column;
+    align-items: stretch;
   }
 }

@@ -7,6 +7,7 @@ export const DEMO_USERS = [
 export const ROLE_LABELS = {
   ADMIN: "관리자",
   USER: "일반",
+  ANALYST: "애널리스트",
 };
 
 export const ORDER_SIDE_LABELS = {
@@ -79,13 +80,23 @@ export const STOCK_NAME_MAP = {
   "051910": "LG화학",
 };
 
+export const CANDLE_INTERVALS = [
+  { value: "1m", label: "1분" },
+  { value: "3m", label: "3분" },
+  { value: "5m", label: "5분" },
+  { value: "10m", label: "10분" },
+  { value: "1d", label: "일봉" },
+];
+
 export const TOP_TABS = ["현재가(1)", "복수 현재가(1)", "시간외 체결(1)", "일자별 주가(1)", "호가잔량 추이", "당일/전일 주가비교"];
 
 export const LOWER_TABS = [
   { key: "orders", label: "체결1" },
+  { key: "candles", label: "분봉/일봉" },
   { key: "risk", label: "FDS 경보" },
   { key: "holdings", label: "잔고" },
   { key: "audit", label: "감사로그" },
+  { key: "lab", label: "공격 실습" },
 ];
 
 export function formatPrice(value) {
@@ -118,6 +129,20 @@ export function formatTime(value) {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+  });
+}
+
+export function formatCandleTimestamp(value, interval = "1m") {
+  const date = new Date(value);
+  if (interval === "1d") {
+    return date.toLocaleDateString("ko-KR");
+  }
+  return date.toLocaleString("ko-KR", {
+    hour12: false,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
@@ -172,6 +197,7 @@ export function localizeMessage(message) {
     "Risk event not found": "위험 이벤트를 찾을 수 없습니다.",
     "Admin access required": "관리자 권한이 필요합니다.",
     "Unsupported admin action": "지원하지 않는 관리자 조치입니다.",
+    "Lab scenario not found": "실습 시나리오를 찾을 수 없습니다.",
     "Request failed": "요청 처리 중 오류가 발생했습니다.",
   };
 
@@ -183,16 +209,25 @@ export function buildStockSnapshot(stock) {
     return null;
   }
 
-  const currentPrice = Number(stock.current_price || 0);
+  const currentPrice = Number(stock.current_price || stock.price || 0);
   const seed = symbolSeed(stock.symbol);
   const tick = getTickSize(currentPrice);
-  const previousClose = Math.max(currentPrice - (((seed % 7) - 3) * tick * 2), tick);
+  const previousClose = Math.max(
+    Number(stock.previous_close || 0) || currentPrice - (((seed % 7) - 3) * tick * 2),
+    tick,
+  );
   const change = currentPrice - previousClose;
   const changeRate = previousClose ? (change / previousClose) * 100 : 0;
-  const open = Math.max(previousClose + (((seed % 5) - 2) * tick), tick);
-  const high = Math.max(currentPrice, open) + ((((seed + 1) % 4) + 1) * tick);
-  const low = Math.max(Math.min(currentPrice, open) - ((((seed + 2) % 4) + 1) * tick), tick);
-  const volume = 110000 + seed * 173;
+  const open = Math.max(Number(stock.open || 0) || previousClose + (((seed % 5) - 2) * tick), tick);
+  const high = Math.max(
+    Number(stock.day_high || 0) || Math.max(currentPrice, open) + ((((seed + 1) % 4) + 1) * tick),
+    tick,
+  );
+  const low = Math.max(
+    Number(stock.day_low || 0) || Math.min(currentPrice, open) - ((((seed + 2) % 4) + 1) * tick),
+    tick,
+  );
+  const volume = Number(stock.volume || 110000 + seed * 173);
   const tradingValue = currentPrice * volume;
 
   return {
@@ -246,37 +281,6 @@ export function buildOrderBook(stock, snapshot) {
   }
 
   return rows;
-}
-
-export function buildChartSeries(stock, snapshot) {
-  if (!stock || !snapshot) {
-    return [];
-  }
-
-  const bars = [];
-  const seed = symbolSeed(stock.symbol);
-  const tick = snapshot.tick;
-  let cursor = snapshot.previousClose;
-
-  for (let index = 0; index < 26; index += 1) {
-    const open = Math.max(cursor + ((((seed + index * 3) % 7) - 3) * tick), tick);
-    const close = Math.max(open + ((((seed + index * 5) % 9) - 4) * tick), tick);
-    const high = Math.max(open, close) + ((((seed + index) % 4) + 1) * tick);
-    const low = Math.max(Math.min(open, close) - ((((seed + index * 2) % 4) + 1) * tick), tick);
-    const volume = 500 + ((seed * (index + 1) * 29) % 5000);
-
-    bars.push({
-      label: `${9 + Math.floor(index / 2)}:${index % 2 === 0 ? "00" : "30"}`,
-      open,
-      close,
-      high,
-      low,
-      volume,
-    });
-    cursor = close;
-  }
-
-  return bars;
 }
 
 export function buildInvestorFlows(stock, snapshot) {

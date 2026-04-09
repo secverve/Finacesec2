@@ -4,6 +4,7 @@ import { api } from "./api/client";
 import HtsChart from "./HtsChart";
 import {
   ACCOUNT_STATUS_LABELS,
+  CANDLE_INTERVALS,
   DEMO_USERS,
   LOWER_TABS,
   MARKET_LABELS,
@@ -16,12 +17,12 @@ import {
   RISK_STATUS_LABELS,
   ROLE_LABELS,
   TOP_TABS,
-  buildChartSeries,
   buildInvestorFlows,
   buildOrderBook,
   buildStockSnapshot,
   buildTradeTape,
   buildUserRiskRows,
+  formatCandleTimestamp,
   formatChange,
   formatPercent,
   formatPrice,
@@ -49,6 +50,39 @@ function ValuePill({ value, variant = "neutral" }) {
   return <span className={`value-pill value-pill-${variant}`}>{value}</span>;
 }
 
+function getAuditTraceId(log) {
+  return log?.payload?.trace?.request_id || log?.payload?.request_id || log?.payload?.trace_id || "-";
+}
+
+function getAuditSummary(log) {
+  const payload = log?.payload?.data || {};
+
+  if (log.event_type === "ORDER_CREATED") {
+    return `${payload.symbol || "-"} ${formatVolume(payload.quantity)}주 / FDS ${payload.risk_score ?? "-"}점`;
+  }
+
+  if (log.event_type === "ADMIN_ACTION") {
+    return `${payload.action_type || "-"} / ${payload.status || "-"} / ${payload.decision || "-"}`;
+  }
+
+  if (log.event_type === "LAB_SCENARIO_EXECUTED") {
+    return `${payload.scenario_code || "-"} / 주문 ${payload.created_order_ids?.length || 0}건`;
+  }
+
+  if (log.event_type === "LOGIN_SUCCEEDED" || log.event_type === "LOGIN_FAILED" || log.event_type === "LOGIN_BLOCKED") {
+    return `${payload.email || "-"} / ${log.ip_address}`;
+  }
+
+  const entries = Object.entries(payload).slice(0, 2);
+  if (!entries.length) {
+    return "-";
+  }
+
+  return entries
+    .map(([key, value]) => `${key}:${Array.isArray(value) ? value.length : value}`)
+    .join(" / ");
+}
+
 export default function App() {
   const [token, setToken] = useState(() => window.localStorage.getItem("verve-fds-token") || "");
   const [deviceId] = useState(() => window.localStorage.getItem("verve-device-id") || crypto.randomUUID());
@@ -63,6 +97,12 @@ export default function App() {
   const [searchText, setSearchText] = useState("");
   const [marketView, setMarketView] = useState("ALL");
   const [lowerTab, setLowerTab] = useState("orders");
+  const [chartInterval, setChartInterval] = useState("1m");
+  const [candles, setCandles] = useState([]);
+  const [selectedCandleIndex, setSelectedCandleIndex] = useState(-1);
+  const [chartLoading, setChartLoading] = useState(false);
+  const [labScenarios, setLabScenarios] = useState([]);
+  const [scenarioLoadingCode, setScenarioLoadingCode] = useState("");
   const [loginForm, setLoginForm] = useState({
     email: "trader@verve.local",
     password: "Trader1234!",
@@ -77,8 +117,8 @@ export default function App() {
     region: "KR",
   });
   const deferredSearch = useDeferredValue(searchText);
+  const isAdmin = user?.role === "ADMIN";
 
-  // EFFECTS
   useEffect(() => {
     window.localStorage.setItem("verve-device-id", deviceId);
   }, [deviceId]);
@@ -95,13 +135,94 @@ export default function App() {
     refreshDashboard();
   }, [token]);
 
-  // ACTIONS
-  async function refreshDashboard(activeToken = token) {
+  useEffect(() => {
+    if (!isAdmin && (lowerTab === "audit" || lowerTab === "lab")) {
+      setLowerTab("orders");
+    }
+  }, [isAdmin, lowerTab]);
+
+  useEffect(() => {
+    loadCandles();
+  }, [orderForm.symbol, chartInterval]);
+
+  useEffect(() => {
+    if (!token) {
+      return undefined;
+    }
+
+    const refreshTimer = window.setInterval(() => {
+      refreshDashboard(token, { silent: true });
+    }, 7000);
+
+    return () => window.clearInterval(refreshTimer);
+  }, [token]);
+
+  useEffect(() => {
+    if (!orderForm.symbol) {
+      return undefined;
+    }
+
+    const candleTimer = window.setInterval(() => {
+      loadCandles(orderForm.symbol, chartInterval, { silent: true });
+    }, 20000);
+
+    return () => window.clearInterval(candleTimer);
+  }, [orderForm.symbol, chartInterval]);
+
+  useEffect(() => {
+    if (!token) {
+      return undefined;
+    }
+
+    function handleShortcut(event) {
+      if (event.key === "F5") {
+        event.preventDefault();
+        refreshDashboard(token);
+      }
+
+      if (event.altKey && event.key === "1") {
+        event.preventDefault();
+        setLowerTab("orders");
+      }
+
+      if (event.altKey && event.key === "2") {
+        event.preventDefault();
+        setLowerTab("candles");
+      }
+
+      if (event.altKey && event.key === "3") {
+        event.preventDefault();
+        setLowerTab("risk");
+      }
+
+      if (event.altKey && event.key === "4") {
+        event.preventDefault();
+        setLowerTab("holdings");
+      }
+
+      if (event.altKey && event.key.toLowerCase() === "b") {
+        event.preventDefault();
+        setOrderForm((current) => ({ ...current, side: "BUY" }));
+      }
+
+      if (event.altKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        setOrderForm((current) => ({ ...current, side: "SELL" }));
+      }
+    }
+
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [token]);
+
+  async function refreshDashboard(activeToken = token, { silent = false } = {}) {
     if (!activeToken) {
       return;
     }
 
-    setLoading(true);
+    if (!silent) {
+      setLoading(true);
+    }
     setError("");
 
     try {
@@ -114,11 +235,12 @@ export default function App() {
 
       let adminData = { riskEvents: [], auditLogs: [] };
       if (me.role === "ADMIN") {
-        const [eventList, logList] = await Promise.all([
+        const [eventList, logList, scenarioList] = await Promise.all([
           api.listRiskEvents(activeToken, deviceId),
           api.listAuditLogs(activeToken, deviceId),
+          api.listLabScenarios(activeToken, deviceId),
         ]);
-        adminData = { riskEvents: eventList, auditLogs: logList };
+        adminData = { riskEvents: eventList, auditLogs: logList, labScenarios: scenarioList };
       }
 
       startTransition(() => {
@@ -128,13 +250,14 @@ export default function App() {
         setOrders(orderList);
         setRiskEvents(adminData.riskEvents);
         setAuditLogs(adminData.auditLogs);
+        setLabScenarios(adminData.labScenarios || []);
         setOrderForm((current) => ({
           ...current,
           account_id: current.account_id || portfolioSnapshot.account?.id || "",
           symbol: current.symbol || stockList[0]?.symbol || "",
           price:
             current.order_type === "LIMIT" && !current.price && stockList[0]?.current_price
-              ? Number(stockList[0].current_price)
+              ? String(Number(stockList[0].current_price))
               : current.price,
         }));
       });
@@ -144,7 +267,32 @@ export default function App() {
         setToken("");
       }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
+    }
+  }
+
+  async function loadCandles(symbol = orderForm.symbol, interval = chartInterval, { silent = false } = {}) {
+    if (!symbol) {
+      setCandles([]);
+      setSelectedCandleIndex(-1);
+      return;
+    }
+
+    if (!silent) {
+      setChartLoading(true);
+    }
+    try {
+      const candleList = await api.getCandles(symbol, interval, interval === "1d" ? 90 : 80);
+      setCandles(candleList);
+      setSelectedCandleIndex(candleList.length - 1);
+    } catch (candleError) {
+      setError(localizeMessage(candleError.message));
+    } finally {
+      if (!silent) {
+        setChartLoading(false);
+      }
     }
   }
 
@@ -176,6 +324,7 @@ export default function App() {
       setOrders([]);
       setRiskEvents([]);
       setAuditLogs([]);
+      setLabScenarios([]);
     }
   }
 
@@ -199,6 +348,8 @@ export default function App() {
         orderForm.region,
       );
       await refreshDashboard(token);
+      await loadCandles(orderForm.symbol, chartInterval, { silent: true });
+      setLowerTab("orders");
     } catch (submitError) {
       setError(localizeMessage(submitError.message));
       setLoading(false);
@@ -231,15 +382,29 @@ export default function App() {
     }
   }
 
+  async function handleExecuteLabScenario(scenarioCode) {
+    setScenarioLoadingCode(scenarioCode);
+    setError("");
+
+    try {
+      await api.executeLabScenario(token, scenarioCode, deviceId);
+      await refreshDashboard(token);
+      setLowerTab("lab");
+    } catch (scenarioError) {
+      setError(localizeMessage(scenarioError.message));
+    } finally {
+      setScenarioLoadingCode("");
+    }
+  }
+
   function handleSelectStock(stock) {
     setOrderForm((current) => ({
       ...current,
       symbol: stock.symbol,
-      price: current.order_type === "LIMIT" ? Number(stock.current_price) : current.price,
+      price: current.order_type === "LIMIT" ? String(Number(stock.current_price)) : current.price,
     }));
   }
 
-  // DERIVED
   const filteredStocks = stocks.filter((stock) => {
     const marketMatched =
       marketView === "ALL"
@@ -254,16 +419,59 @@ export default function App() {
   });
 
   const stockRows = filteredStocks.length ? filteredStocks : stocks;
-  const selectedStock = stockRows.find((stock) => stock.symbol === orderForm.symbol) || stocks[0] || null;
+  const selectedStock = stocks.find((stock) => stock.symbol === orderForm.symbol) || stockRows[0] || stocks[0] || null;
   const snapshot = buildStockSnapshot(selectedStock);
-  const orderBook = buildOrderBook(selectedStock, snapshot);
-  const chartSeries = buildChartSeries(selectedStock, snapshot);
-  const investorFlows = buildInvestorFlows(selectedStock, snapshot);
-  const tradeTape = buildTradeTape(selectedStock, orders, snapshot);
+  const activeCandle = candles[selectedCandleIndex] || candles[candles.length - 1] || null;
+  const candleReferenceClose =
+    candles.length > 1
+      ? Number(candles[Math.max(candles.length - 2, 0)]?.close || 0)
+      : Number(snapshot?.previousClose || 0);
+  const displaySnapshot =
+    activeCandle && snapshot
+      ? {
+          ...snapshot,
+          currentPrice: Number(activeCandle.close),
+          open: Number(activeCandle.open),
+          high: Number(activeCandle.high),
+          low: Number(activeCandle.low),
+          previousClose: candleReferenceClose || Number(snapshot.previousClose || 0),
+          change: Number(activeCandle.close) - (candleReferenceClose || Number(snapshot.previousClose || 0)),
+          changeRate:
+            candleReferenceClose || Number(snapshot.previousClose || 0)
+              ? ((Number(activeCandle.close) - (candleReferenceClose || Number(snapshot.previousClose || 0))) /
+                  (candleReferenceClose || Number(snapshot.previousClose || 0))) *
+                100
+              : 0,
+          volume: Number(activeCandle.volume),
+          tradingValue: Number(activeCandle.close) * Number(activeCandle.volume),
+        }
+      : snapshot;
+  const orderBook = buildOrderBook(selectedStock, displaySnapshot);
+  const investorFlows = buildInvestorFlows(selectedStock, displaySnapshot);
+  const tradeTape = buildTradeTape(selectedStock, orders, displaySnapshot);
   const riskRows = buildUserRiskRows(user, orders, riskEvents, selectedStock);
   const holdings = portfolio?.holdings || [];
+  const totalCostBasis = holdings.reduce(
+    (sum, holding) => sum + Number(holding.average_price || 0) * Number(holding.quantity || 0),
+    0,
+  );
+  const totalUnrealizedPnl = holdings.reduce((sum, holding) => sum + Number(holding.unrealized_pnl || 0), 0);
+  const totalReturnRate = totalCostBasis ? (totalUnrealizedPnl / totalCostBasis) * 100 : 0;
+  const visibleLowerTabs = LOWER_TABS.filter((tab) => {
+    if (tab.key === "audit" || tab.key === "lab") {
+      return isAdmin;
+    }
+    return true;
+  });
+  const marketStatus = [
+    { label: "관심종목", value: `${stocks.filter((stock) => stock.is_watchlist).length}개` },
+    { label: "보유종목", value: `${holdings.length}개` },
+    { label: "평가손익", value: `${formatPrice(totalUnrealizedPnl)}원` },
+    { label: "수익률", value: formatPercent(totalReturnRate) },
+    { label: "보류주문", value: `${orders.filter((order) => order.status === "HELD").length}건` },
+    { label: "위험이벤트", value: `${riskRows.length}건` },
+  ];
 
-  // LOGIN_VIEW
   if (!token) {
     return (
       <main className="login-desktop">
@@ -379,6 +587,7 @@ export default function App() {
                 placeholder="종목코드/종목명"
               />
             </label>
+            <div className="toolbar-note">공개 시세 API 기준, 7초 자동 갱신 / F5 새로고침 / Alt+1~4 탭 / Alt+B,S 매매</div>
           </div>
 
           <div className="toolbar-group toolbar-actions">
@@ -424,7 +633,7 @@ export default function App() {
                           <td>{stock.symbol}</td>
                           <td>{normalizeStockName(stock)}</td>
                           <td className={getSignedClass(rowSnapshot.change)}>{formatPrice(stock.current_price)}</td>
-                          <td>{stock.is_watchlist ? "감시" : "일반"}</td>
+                          <td>{stock.is_watchlist ? "관심" : stock.market}</td>
                         </tr>
                       );
                     })}
@@ -445,6 +654,18 @@ export default function App() {
                 />
               </div>
             </section>
+
+            <section className="hts-panel">
+              <div className="panel-title">시장 모니터</div>
+              <div className="panel-body summary-strip">
+                {marketStatus.map((item) => (
+                  <article key={item.label} className="summary-card">
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                  </article>
+                ))}
+              </div>
+            </section>
           </aside>
 
           <section className="column-center">
@@ -459,28 +680,31 @@ export default function App() {
                 <div className="price-core">
                   <div className="price-code-box">
                     <span className="code-chip">{selectedStock?.symbol}</span>
-                    <div>
+                    <div className="code-box-text">
                       <strong>{normalizeStockName(selectedStock)}</strong>
-                      <span>{selectedStock?.market || "KOSPI"}</span>
+                      <span>
+                        {MARKET_LABELS[selectedStock?.market] || selectedStock?.market || "KRX"} /{" "}
+                        {selectedStock?.is_watchlist ? "관심종목" : "일반종목"}
+                      </span>
                     </div>
                   </div>
                   <div className="price-block">
-                    <strong className={`primary-price ${getSignedClass(snapshot?.change)}`}>
-                      {formatPrice(snapshot?.currentPrice)}
+                    <strong className={`primary-price ${getSignedClass(displaySnapshot?.change)}`}>
+                      {formatPrice(displaySnapshot?.currentPrice)}
                     </strong>
-                    <span className={getSignedClass(snapshot?.change)}>
-                      {formatChange(snapshot?.change)} / {formatPercent(snapshot?.changeRate)}
+                    <span className={getSignedClass(displaySnapshot?.change)}>
+                      {formatChange(displaySnapshot?.change)} / {formatPercent(displaySnapshot?.changeRate)}
                     </span>
                   </div>
                 </div>
 
                 <div className="metric-grid">
-                  <MetricValue label="시가" value={formatPrice(snapshot?.open)} />
-                  <MetricValue label="고가" value={formatPrice(snapshot?.high)} className="is-up" />
-                  <MetricValue label="저가" value={formatPrice(snapshot?.low)} className="is-down" />
-                  <MetricValue label="전일가" value={formatPrice(snapshot?.previousClose)} />
-                  <MetricValue label="거래량" value={formatVolume(snapshot?.volume)} />
-                  <MetricValue label="거래대금" value={formatVolume(snapshot?.tradingValue)} />
+                  <MetricValue label="시가" value={formatPrice(displaySnapshot?.open)} />
+                  <MetricValue label="고가" value={formatPrice(displaySnapshot?.high)} className="is-up" />
+                  <MetricValue label="저가" value={formatPrice(displaySnapshot?.low)} className="is-down" />
+                  <MetricValue label="전일가" value={formatPrice(displaySnapshot?.previousClose)} />
+                  <MetricValue label="거래량" value={formatVolume(displaySnapshot?.volume)} />
+                  <MetricValue label="거래대금" value={formatVolume(displaySnapshot?.tradingValue)} />
                 </div>
               </div>
             </section>
@@ -501,7 +725,7 @@ export default function App() {
                     <tbody>
                       {orderBook.map((row) => (
                         <tr key={`${row.side}-${row.level}`} className={row.side === "ask" ? "ask-row" : "bid-row"}>
-                          <td className={getSignedClass(row.price - snapshot.previousClose)}>{formatPrice(row.price)}</td>
+                          <td className={getSignedClass(row.price - displaySnapshot.previousClose)}>{formatPrice(row.price)}</td>
                           <td className={getSignedClass(row.rate)}>{formatPercent(row.rate)}</td>
                           <td>{formatVolume(row.quantity)}</td>
                           <td>{row.broker}</td>
@@ -513,9 +737,55 @@ export default function App() {
               </section>
 
               <section className="hts-panel">
-                <div className="panel-title">분차트</div>
+                <div className="panel-title">
+                  <span>차트</span>
+                  <span className="panel-title-inline">
+                    {CANDLE_INTERVALS.find((item) => item.value === chartInterval)?.label || chartInterval}
+                  </span>
+                </div>
                 <div className="panel-body chart-panel-body">
-                  <HtsChart series={chartSeries} />
+                  <div className="chart-toolbar">
+                    <div className="interval-strip">
+                      {CANDLE_INTERVALS.map((item) => (
+                        <button
+                          key={item.value}
+                          type="button"
+                          className={`interval-button ${chartInterval === item.value ? "active" : ""}`}
+                          onClick={() => setChartInterval(item.value)}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="chart-status">
+                      {chartLoading
+                        ? "차트 불러오는 중..."
+                        : `기준시각 ${activeCandle ? formatCandleTimestamp(activeCandle.timestamp, chartInterval) : "-"}`}
+                    </span>
+                  </div>
+
+                  <div className="candle-metric-grid">
+                    <MetricValue
+                      label="기준시각"
+                      value={activeCandle ? formatCandleTimestamp(activeCandle.timestamp, chartInterval) : "-"}
+                    />
+                    <MetricValue label="시가" value={activeCandle ? formatPrice(activeCandle.open) : "-"} />
+                    <MetricValue label="고가" value={activeCandle ? formatPrice(activeCandle.high) : "-"} className="is-up" />
+                    <MetricValue label="저가" value={activeCandle ? formatPrice(activeCandle.low) : "-"} className="is-down" />
+                    <MetricValue
+                      label="종가"
+                      value={activeCandle ? formatPrice(activeCandle.close) : "-"}
+                      className={getSignedClass(activeCandle ? Number(activeCandle.close) - Number(activeCandle.open) : 0)}
+                    />
+                    <MetricValue label="거래량" value={activeCandle ? formatVolume(activeCandle.volume) : "-"} />
+                  </div>
+
+                  <HtsChart
+                    series={candles}
+                    interval={chartInterval}
+                    selectedIndex={selectedCandleIndex}
+                    onSelect={setSelectedCandleIndex}
+                  />
                 </div>
               </section>
             </div>
@@ -586,7 +856,7 @@ export default function App() {
                           order_type: event.target.value,
                           price:
                             event.target.value === "LIMIT" && selectedStock
-                              ? Number(selectedStock.current_price)
+                              ? String(Number(selectedStock.current_price))
                               : current.price,
                         }))
                       }
@@ -607,11 +877,15 @@ export default function App() {
                   <label className="inline-field vertical">
                     <span>가격</span>
                     <input
-                      type="number"
+                      type={orderForm.order_type === "MARKET" ? "text" : "number"}
                       min="0"
                       step="1"
                       disabled={orderForm.order_type === "MARKET"}
-                      value={orderForm.order_type === "MARKET" ? formatPrice(snapshot?.currentPrice) : orderForm.price}
+                      value={
+                        orderForm.order_type === "MARKET"
+                          ? `${formatPrice(displaySnapshot?.currentPrice)} (시장가)`
+                          : orderForm.price
+                      }
                       onChange={(event) => setOrderForm((current) => ({ ...current, price: event.target.value }))}
                     />
                   </label>
@@ -628,6 +902,9 @@ export default function App() {
                       ))}
                     </select>
                   </label>
+                  <p className="info-note">
+                    해외 지역이나 신규 기기에서 대량 주문을 넣으면 FDS 규칙이 즉시 점수를 부여하고 관리자 검토로 넘깁니다.
+                  </p>
                   <div className="order-button-row">
                     <button
                       type="button"
@@ -720,7 +997,7 @@ export default function App() {
 
         <section className="lower-panel">
           <div className="lower-tab-strip">
-            {LOWER_TABS.filter((tab) => (tab.key === "audit" ? user?.role === "ADMIN" : true)).map((tab) => (
+            {visibleLowerTabs.map((tab) => (
               <button
                 key={tab.key}
                 type="button"
@@ -743,6 +1020,7 @@ export default function App() {
                     <th>주문유형</th>
                     <th>수량</th>
                     <th>상태</th>
+                    <th>체결가</th>
                     <th>FDS</th>
                   </tr>
                 </thead>
@@ -755,9 +1033,55 @@ export default function App() {
                       <td>{ORDER_TYPE_LABELS[order.order_type] || order.order_type}</td>
                       <td>{formatVolume(order.quantity)}</td>
                       <td>{ORDER_STATUS_LABELS[order.status] || order.status}</td>
+                      <td>{order.executed_price ? formatPrice(order.executed_price) : "-"}</td>
                       <td className={getSignedClass(order.fds_score)}>{order.fds_score}</td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            ) : null}
+
+            {lowerTab === "candles" ? (
+              <table className="hts-table table-clickable">
+                <thead>
+                  <tr>
+                    <th>시각</th>
+                    <th>시가</th>
+                    <th>고가</th>
+                    <th>저가</th>
+                    <th>종가</th>
+                    <th>거래량</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {candles.length ? (
+                    candles
+                      .slice()
+                      .reverse()
+                      .map((candle) => {
+                        const actualIndex = candles.findIndex((item) => item.timestamp === candle.timestamp);
+                        return (
+                          <tr
+                            key={candle.timestamp}
+                            className={actualIndex === selectedCandleIndex ? "selected" : ""}
+                            onClick={() => setSelectedCandleIndex(actualIndex)}
+                          >
+                            <td>{formatCandleTimestamp(candle.timestamp, chartInterval)}</td>
+                            <td>{formatPrice(candle.open)}</td>
+                            <td className="is-up">{formatPrice(candle.high)}</td>
+                            <td className="is-down">{formatPrice(candle.low)}</td>
+                            <td className={getSignedClass(Number(candle.close) - Number(candle.open))}>
+                              {formatPrice(candle.close)}
+                            </td>
+                            <td>{formatVolume(candle.volume)}</td>
+                          </tr>
+                        );
+                      })
+                  ) : (
+                    <tr>
+                      <td colSpan="6">차트 데이터가 없습니다.</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             ) : null}
@@ -772,6 +1096,7 @@ export default function App() {
                     <th>판정</th>
                     <th>상태</th>
                     <th>점수</th>
+                    <th>요약</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -784,11 +1109,12 @@ export default function App() {
                         <td>{RISK_DECISION_LABELS[row.decision] || row.decision}</td>
                         <td>{RISK_STATUS_LABELS[row.status] || ORDER_STATUS_LABELS[row.status] || row.status}</td>
                         <td>{row.total_score}</td>
+                        <td>{row.summary || "-"}</td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="6">표시할 FDS 이벤트가 없습니다.</td>
+                      <td colSpan="7">표시할 FDS 이벤트가 없습니다.</td>
                     </tr>
                   )}
                 </tbody>
@@ -805,6 +1131,7 @@ export default function App() {
                     <th>현재가</th>
                     <th>평가금액</th>
                     <th>평가손익</th>
+                    <th>수익률</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -817,26 +1144,40 @@ export default function App() {
                         <td>{formatPrice(holding.current_price)}</td>
                         <td>{formatPrice(holding.market_value)}</td>
                         <td className={getSignedClass(holding.unrealized_pnl)}>{formatPrice(holding.unrealized_pnl)}</td>
+                        <td
+                          className={getSignedClass(
+                            holding.quantity && holding.average_price
+                              ? (Number(holding.unrealized_pnl) / (Number(holding.average_price) * Number(holding.quantity))) * 100
+                              : 0,
+                          )}
+                        >
+                          {formatPercent(
+                            holding.quantity && holding.average_price
+                              ? (Number(holding.unrealized_pnl) / (Number(holding.average_price) * Number(holding.quantity))) * 100
+                              : 0,
+                          )}
+                        </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="6">보유 종목이 없습니다.</td>
+                      <td colSpan="7">보유 종목이 없습니다.</td>
                     </tr>
                   )}
                 </tbody>
               </table>
             ) : null}
 
-            {lowerTab === "audit" && user?.role === "ADMIN" ? (
+            {lowerTab === "audit" && isAdmin ? (
               <table className="hts-table">
                 <thead>
                   <tr>
                     <th>시간</th>
                     <th>이벤트</th>
                     <th>대상</th>
-                    <th>지역</th>
-                    <th>디바이스</th>
+                    <th>요청추적</th>
+                    <th>요청정보</th>
+                    <th>요약</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -846,17 +1187,50 @@ export default function App() {
                         <td>{formatTime(log.created_at)}</td>
                         <td>{log.event_type}</td>
                         <td>{`${log.target_type} ${log.target_id || "-"}`}</td>
-                        <td>{REGION_LABELS[log.region] || log.region}</td>
-                        <td>{log.device_id}</td>
+                        <td>{getAuditTraceId(log)}</td>
+                        <td>{`${log.ip_address} / ${REGION_LABELS[log.region] || log.region} / ${log.device_id}`}</td>
+                        <td className="audit-summary-cell">{getAuditSummary(log)}</td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="5">감사 로그가 없습니다.</td>
+                      <td colSpan="6">감사 로그가 없습니다.</td>
                     </tr>
                   )}
                 </tbody>
               </table>
+            ) : null}
+
+            {lowerTab === "lab" && isAdmin ? (
+              <div className="lab-grid">
+                {labScenarios.length ? (
+                  labScenarios.map((scenario) => (
+                    <article key={scenario.code} className="lab-card">
+                      <div className="lab-card-header">
+                        <div>
+                          <strong>{scenario.title}</strong>
+                          <p>{scenario.description}</p>
+                        </div>
+                        <ValuePill value="안전 실습" variant="neutral" />
+                      </div>
+                      <div className="lab-card-meta">
+                        <span>탐지 포인트: {scenario.detection_focus}</span>
+                        <span>예상 결과: {scenario.expected_outcome}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="lab-execute-button"
+                        disabled={scenarioLoadingCode === scenario.code}
+                        onClick={() => handleExecuteLabScenario(scenario.code)}
+                      >
+                        {scenarioLoadingCode === scenario.code ? "실행 중..." : "시나리오 실행"}
+                      </button>
+                    </article>
+                  ))
+                ) : (
+                  <div className="empty-box">실행 가능한 실습 시나리오가 없습니다.</div>
+                )}
+              </div>
             ) : null}
           </div>
         </section>

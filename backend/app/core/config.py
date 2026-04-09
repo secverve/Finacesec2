@@ -13,6 +13,7 @@ DEFAULT_JWT_SECRET = "change-this-in-production-with-at-least-32-bytes"
 class Settings(BaseSettings):
     project_name: str = "VERVE FDS Infra"
     api_v1_prefix: str = "/api/v1"
+    log_level: str = "INFO"
     database_url: str = "sqlite:///./fds_infra.db"
     redis_url: str = "redis://localhost:6379/0"
     jwt_secret_key: str = DEFAULT_JWT_SECRET

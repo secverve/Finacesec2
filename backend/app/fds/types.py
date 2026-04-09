@@ -17,6 +17,8 @@ class RequestContext:
     ip_address: str
     region: str
     device_id: str
+    request_id: str = "n/a"
+    channel: str = "web"
 
 
 @dataclass(slots=True)
@@ -56,4 +58,3 @@ class RuleDefinition:
     severity: RiskSeverity
     reason_template: str
     condition: Callable[[RuleContext], bool]
-
