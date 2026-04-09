@@ -13,7 +13,7 @@ backend/__pycache__/
 backend/.pytest_cache/
 frontend/node_modules/
 frontend/dist/
+*.egg-info/
 *.db
 *.sqlite3
 *.log
-
