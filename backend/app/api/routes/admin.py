@@ -16,6 +16,7 @@ from app.schemas.admin import (
     IncidentTimelineEntryResponse,
     RuleCatalogResponse,
     SecurityDeviceResponse,
+    SecurityFeedEntryResponse,
     SecurityOverviewResponse,
     SecurityPolicyResponse,
     SessionRevokeRequest,
@@ -33,6 +34,7 @@ from app.services.admin_service import (
     list_auth_sessions_view,
     list_risk_events,
     list_rule_catalog,
+    list_security_feed,
     list_security_devices_view,
     list_security_policy_catalog,
     revoke_auth_session,
@@ -111,6 +113,15 @@ def security_overview(
 ) -> dict:
     del admin_user
     return get_security_overview_view(db)
+
+
+@router.get("/security/feed", response_model=list[SecurityFeedEntryResponse])
+def security_feed(
+    db: Annotated[Session, Depends(get_db)],
+    admin_user: Annotated[User, Depends(get_admin_user)],
+) -> list[dict]:
+    del admin_user
+    return list_security_feed(db)
 
 
 @router.get("/security/devices", response_model=list[SecurityDeviceResponse])

@@ -58,6 +58,99 @@ def list_audit_logs(db: Session) -> list[AuditLog]:
     return list(db.scalars(statement).all())
 
 
+def _feed_source(event_type: str) -> str:
+    if event_type.startswith("LOGIN") or event_type == "LOGOUT":
+        return "AUTH"
+    if "SESSION" in event_type:
+        return "SESSION"
+    if "DEVICE" in event_type:
+        return "DEVICE"
+    if event_type.startswith("ADMIN_"):
+        return "ADMIN"
+    if event_type.startswith("LAB_"):
+        return "LAB"
+    return "FDS"
+
+
+def _feed_severity(log: AuditLog) -> str:
+    payload = log.payload.get("data", {}) if isinstance(log.payload, dict) else {}
+    indicators = log.payload.get("indicators", {}) if isinstance(log.payload, dict) else {}
+    risk_score = indicators.get("risk_score") or payload.get("risk_score") or 0
+    decision = indicators.get("decision") or payload.get("decision") or payload.get("risk_decision")
+    event_type = log.event_type
+
+    if event_type in {"ORDER_SECURITY_BLOCKED", "LOGIN_BLOCKED", "SECURITY_SESSION_REVOKED"}:
+        return "CRITICAL"
+    if event_type == "SECURITY_DEVICE_ACTION" and payload.get("action_type") == "BLOCK":
+        return "CRITICAL"
+    if decision == "BLOCKED" or int(risk_score or 0) >= 80:
+        return "CRITICAL"
+    if event_type in {"ORDER_SECURITY_STEP_UP", "LOGIN_FAILED"}:
+        return "SUSPICIOUS"
+    if decision == "AUTH_REQUIRED" or "STEP_UP" in event_type or int(risk_score or 0) >= 40:
+        return "SUSPICIOUS"
+    if int(risk_score or 0) >= 20 or event_type.startswith("ORDER_"):
+        return "CAUTION"
+    return "NORMAL"
+
+
+def _feed_headline(log: AuditLog) -> str:
+    payload = log.payload.get("data", {}) if isinstance(log.payload, dict) else {}
+    mapping = {
+        "LOGIN_SUCCEEDED": "인증 성공 및 세션 발급",
+        "LOGIN_FAILED": "로그인 실패 탐지",
+        "LOGIN_BLOCKED": "잠긴 계정 또는 차단 단말 로그인 차단",
+        "ORDER_CREATED": "주문 생성 및 FDS 평가",
+        "ORDER_EXECUTED": "주문 체결 완료",
+        "ORDER_SECURITY_STEP_UP": "고액 주문 추가 인증 요구",
+        "ORDER_SECURITY_BLOCKED": "보안 정책 기반 주문 차단",
+        "SECURITY_DEVICE_ACTION": f"단말 통제 조치 {payload.get('action_type', '-')}",
+        "SECURITY_SESSION_REVOKED": "세션 강제 회수",
+        "ADMIN_ACTION": f"관리자 사건 조치 {payload.get('action_type', '-')}",
+        "LAB_SCENARIO_EXECUTED": "모의 공격 시나리오 실행",
+    }
+    return mapping.get(log.event_type, log.event_type)
+
+
+def _feed_detail(log: AuditLog) -> str:
+    payload = log.payload.get("data", {}) if isinstance(log.payload, dict) else {}
+    request_meta = log.payload.get("request", {}) if isinstance(log.payload, dict) else {}
+    parts = []
+    if payload.get("symbol"):
+        parts.append(f"종목 {payload['symbol']}")
+    if payload.get("risk_score") is not None:
+        parts.append(f"점수 {payload['risk_score']}")
+    if payload.get("decision"):
+        parts.append(f"판정 {payload['decision']}")
+    if payload.get("action_type"):
+        parts.append(f"조치 {payload['action_type']}")
+    if payload.get("control_reason"):
+        parts.append(f"통제 {payload['control_reason']}")
+    if request_meta.get("request_id"):
+        parts.append(f"REQ {request_meta['request_id']}")
+    parts.append(f"{log.ip_address}/{log.region}/{log.device_id}")
+    return " | ".join(parts[:6])
+
+
+def list_security_feed(db: Session) -> list[dict]:
+    logs = list_audit_logs(db)
+    return [
+        {
+            "timestamp": log.created_at,
+            "severity": _feed_severity(log),
+            "source": _feed_source(log.event_type),
+            "channel": (log.payload.get("event", {}) if isinstance(log.payload, dict) else {}).get("channel", "web"),
+            "headline": _feed_headline(log),
+            "detail": _feed_detail(log),
+            "correlation_key": (log.payload.get("trace", {}) if isinstance(log.payload, dict) else {}).get("request_id", "-"),
+            "ip_address": log.ip_address,
+            "region": log.region,
+            "device_id": log.device_id,
+        }
+        for log in logs[:120]
+    ]
+
+
 def list_rule_catalog() -> list[dict]:
     return [
         {
@@ -198,6 +291,7 @@ __all__ = [
     "list_auth_sessions_view",
     "list_risk_events",
     "list_rule_catalog",
+    "list_security_feed",
     "list_security_devices_view",
     "list_security_policy_catalog",
     "revoke_auth_session",

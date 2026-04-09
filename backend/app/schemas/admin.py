@@ -123,3 +123,16 @@ class IncidentTimelineEntryResponse(BaseModel):
     detail: str
     source_type: str
     source_id: str | None
+
+
+class SecurityFeedEntryResponse(BaseModel):
+    timestamp: datetime
+    severity: str
+    source: str
+    channel: str
+    headline: str
+    detail: str
+    correlation_key: str
+    ip_address: str
+    region: str
+    device_id: str

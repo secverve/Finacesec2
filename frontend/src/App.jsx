@@ -53,6 +53,19 @@ function ValuePill({ value, variant = "neutral" }) {
   return <span className={`value-pill value-pill-${variant}`}>{value}</span>;
 }
 
+function getSecuritySeverityClass(severity) {
+  if (severity === "CRITICAL") {
+    return "severity-critical";
+  }
+  if (severity === "SUSPICIOUS") {
+    return "severity-suspicious";
+  }
+  if (severity === "CAUTION") {
+    return "severity-caution";
+  }
+  return "severity-normal";
+}
+
 function shortId(value) {
   if (!value) {
     return "-";
@@ -108,6 +121,7 @@ export default function App() {
   const [auditLogs, setAuditLogs] = useState([]);
   const [ruleCatalog, setRuleCatalog] = useState([]);
   const [securityOverview, setSecurityOverview] = useState(null);
+  const [securityFeed, setSecurityFeed] = useState([]);
   const [securityDevices, setSecurityDevices] = useState([]);
   const [securitySessions, setSecuritySessions] = useState([]);
   const [securityPolicies, setSecurityPolicies] = useState([]);
@@ -285,17 +299,19 @@ export default function App() {
         labScenarios: [],
         ruleCatalog: [],
         securityOverview: null,
+        securityFeed: [],
         securityDevices: [],
         securitySessions: [],
         securityPolicies: [],
       };
       if (me.role === "ADMIN") {
-        const [eventList, logList, scenarioList, ruleList, overview, deviceList, sessionList, policyList] = await Promise.all([
+        const [eventList, logList, scenarioList, ruleList, overview, feedList, deviceList, sessionList, policyList] = await Promise.all([
           api.listRiskEvents(activeToken, deviceId),
           api.listAuditLogs(activeToken, deviceId),
           api.listLabScenarios(activeToken, deviceId),
           api.listRuleCatalog(activeToken, deviceId),
           api.getSecurityOverview(activeToken, deviceId),
+          api.listSecurityFeed(activeToken, deviceId),
           api.listSecurityDevices(activeToken, deviceId),
           api.listSecuritySessions(activeToken, deviceId),
           api.listSecurityPolicies(activeToken, deviceId),
@@ -306,6 +322,7 @@ export default function App() {
           labScenarios: scenarioList,
           ruleCatalog: ruleList,
           securityOverview: overview,
+          securityFeed: feedList,
           securityDevices: deviceList,
           securitySessions: sessionList,
           securityPolicies: policyList,
@@ -322,6 +339,7 @@ export default function App() {
         setLabScenarios(adminData.labScenarios || []);
         setRuleCatalog(adminData.ruleCatalog || []);
         setSecurityOverview(adminData.securityOverview || null);
+        setSecurityFeed(adminData.securityFeed || []);
         setSecurityDevices(adminData.securityDevices || []);
         setSecuritySessions(adminData.securitySessions || []);
         setSecurityPolicies(adminData.securityPolicies || []);
@@ -457,6 +475,7 @@ export default function App() {
       setAuditLogs([]);
       setRuleCatalog([]);
       setSecurityOverview(null);
+      setSecurityFeed([]);
       setSecurityDevices([]);
       setSecuritySessions([]);
       setSecurityPolicies([]);
@@ -886,6 +905,9 @@ export default function App() {
     .sort((left, right) => right.risk_score - left.risk_score)
     .slice(0, 8);
   const incidentTimelineRows = selectedIncidentTimeline.slice(0, 20);
+  const highlightedSecurityFeed = securityFeed.filter((entry) => entry.severity !== "NORMAL").slice(0, 16);
+  const latestSecurityFeed = securityFeed.slice(0, 24);
+  const criticalFeedCount = securityFeed.filter((entry) => entry.severity === "CRITICAL").length;
   const toolbarNote = isAdmin
     ? "관제 큐·세션·단말 7초 자동 갱신 / 사건 선택 후 조치 / F5 새로고침"
     : "공개 시세 API 기준, 7초 자동 갱신 / F5 새로고침 / Alt+1~4 탭 / Alt+B,S 매매";
@@ -1457,6 +1479,28 @@ export default function App() {
                 </tr>
               </tbody>
             </table>
+          </div>
+        </section>
+
+        <section className="hts-panel">
+          <div className="panel-title">FDS 탐지 로그 창</div>
+          <div className="panel-body">
+            <div className="security-log-console">
+              {latestSecurityFeed.length ? (
+                latestSecurityFeed.map((entry, index) => (
+                  <div key={`${entry.correlation_key}-${index}`} className={`security-log-line ${getSecuritySeverityClass(entry.severity)}`}>
+                    <span className="security-log-time">{formatTime(entry.timestamp)}</span>
+                    <span className="security-log-badge">[{entry.severity}]</span>
+                    <span className="security-log-source">{entry.source}</span>
+                    <span className="security-log-headline">{entry.headline}</span>
+                    <span className="security-log-detail">{entry.detail}</span>
+                    <span className="security-log-correlation">{entry.correlation_key}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="security-log-empty">표시할 FDS 탐지 로그가 없습니다.</div>
+              )}
+            </div>
           </div>
         </section>
       </div>
@@ -2423,28 +2467,30 @@ export default function App() {
                 </section>
 
                 <section className="hts-panel">
-                  <div className="panel-title">운영 메모</div>
-                  <div className="panel-body compact">
-                    <table className="hts-table">
-                      <tbody>
-                        <tr>
-                          <th>현재 큐</th>
-                          <td>{riskEvents.length}건</td>
-                        </tr>
-                        <tr>
-                          <th>관련 감사 로그</th>
-                          <td>{relatedAuditLogs.length}건</td>
-                        </tr>
-                        <tr>
-                          <th>룰 카탈로그</th>
-                          <td>{ruleCatalog.length}종</td>
-                        </tr>
-                        <tr>
-                          <th>최근 실습</th>
-                          <td>{lastLabExecution?.scenario_code || "없음"}</td>
-                        </tr>
-                      </tbody>
-                    </table>
+                  <div className="panel-title">상관분석 로그</div>
+                  <div className="panel-body">
+                    <div className="security-log-console compact">
+                      {highlightedSecurityFeed.length ? (
+                        highlightedSecurityFeed.map((entry, index) => (
+                          <div
+                            key={`highlight-${entry.correlation_key}-${index}`}
+                            className={`security-log-line ${getSecuritySeverityClass(entry.severity)}`}
+                          >
+                            <span className="security-log-time">{formatTime(entry.timestamp)}</span>
+                            <span className="security-log-badge">[{entry.source}]</span>
+                            <span className="security-log-headline">{entry.headline}</span>
+                            <span className="security-log-detail">{entry.detail}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="security-log-empty">상관분석 대상 로그가 없습니다.</div>
+                      )}
+                    </div>
+                    <div className="security-log-summary">
+                      <span>치명 로그 {criticalFeedCount}건</span>
+                      <span>룰 카탈로그 {ruleCatalog.length}종</span>
+                      <span>최근 실습 {lastLabExecution?.scenario_code || "없음"}</span>
+                    </div>
                   </div>
                 </section>
               </>

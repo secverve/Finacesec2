@@ -77,6 +77,9 @@ export const api = {
   getSecurityOverview(token, deviceId) {
     return request("/admin/security/overview", { token, deviceId });
   },
+  listSecurityFeed(token, deviceId) {
+    return request("/admin/security/feed", { token, deviceId });
+  },
   listSecurityDevices(token, deviceId) {
     return request("/admin/security/devices", { token, deviceId });
   },

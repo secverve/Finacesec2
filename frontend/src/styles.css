@@ -888,6 +888,104 @@ button {
   background: linear-gradient(180deg, #fff3f3, #f1d6d6);
 }
 
+.security-log-console {
+  display: grid;
+  gap: 6px;
+  max-height: 280px;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid #2c3440;
+  background: linear-gradient(180deg, #09111c, #111b29);
+  color: #d9e2ee;
+  font-family: Consolas, "D2Coding", monospace;
+  font-size: 11px;
+}
+
+.security-log-console.compact {
+  max-height: 240px;
+}
+
+.security-log-line {
+  display: grid;
+  grid-template-columns: 62px 84px 62px minmax(120px, 0.8fr) 1fr 118px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid rgba(130, 149, 173, 0.22);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.security-log-console.compact .security-log-line {
+  grid-template-columns: 62px 84px minmax(120px, 0.9fr) 1fr;
+}
+
+.security-log-time,
+.security-log-correlation {
+  color: #8ba0b8;
+}
+
+.security-log-badge,
+.security-log-source {
+  font-weight: 700;
+}
+
+.security-log-headline {
+  color: #f3f6fb;
+}
+
+.security-log-detail {
+  color: #b3c1d2;
+}
+
+.security-log-empty {
+  padding: 16px 10px;
+  color: #8ba0b8;
+}
+
+.security-log-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  font-size: 11px;
+  color: #425061;
+}
+
+.severity-critical {
+  border-color: rgba(255, 106, 106, 0.45);
+  box-shadow: inset 3px 0 0 #ff5b5b;
+}
+
+.severity-critical .security-log-badge,
+.severity-critical .security-log-source {
+  color: #ff8888;
+}
+
+.severity-suspicious {
+  border-color: rgba(255, 203, 102, 0.42);
+  box-shadow: inset 3px 0 0 #ffc74a;
+}
+
+.severity-suspicious .security-log-badge,
+.severity-suspicious .security-log-source {
+  color: #ffd26b;
+}
+
+.severity-caution {
+  border-color: rgba(102, 195, 255, 0.35);
+  box-shadow: inset 3px 0 0 #71bcff;
+}
+
+.severity-caution .security-log-badge,
+.severity-caution .security-log-source {
+  color: #8cc7ff;
+}
+
+.severity-normal .security-log-badge,
+.severity-normal .security-log-source {
+  color: #9cb1c8;
+}
+
 .audit-summary-cell {
   color: #465364;
 }
@@ -990,6 +1088,11 @@ button {
   .candle-metric-grid,
   .summary-strip,
   .monitor-index-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .security-log-line,
+  .security-log-console.compact .security-log-line {
     grid-template-columns: 1fr;
   }
 

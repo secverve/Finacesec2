@@ -233,3 +233,29 @@ def test_admin_can_view_and_revoke_security_session(client: TestClient) -> None:
 
     denied_response = client.get("/api/v1/portfolio/me", headers=build_headers(trader_token, "session-device"))
     assert denied_response.status_code == 401
+
+
+def test_admin_can_view_security_feed(client: TestClient) -> None:
+    trader_token = login(client, "trader@verve.local", "Trader1234!", device_id="feed-device")
+    portfolio_response = client.get("/api/v1/portfolio/me", headers=build_headers(trader_token, "feed-device"))
+    account_id = portfolio_response.json()["account"]["id"]
+    client.post(
+        "/api/v1/orders",
+        json={
+            "account_id": account_id,
+            "symbol": "000660",
+            "side": "BUY",
+            "order_type": "MARKET",
+            "quantity": 11,
+            "price": None,
+        },
+        headers=build_headers(trader_token, "feed-device"),
+    )
+
+    admin_token = login(client, "admin@verve.local", "Admin1234!", device_id="feed-admin")
+    feed_response = client.get("/api/v1/admin/security/feed", headers=build_headers(admin_token, "feed-admin"))
+
+    assert feed_response.status_code == 200, feed_response.text
+    payload = feed_response.json()
+    assert payload
+    assert {"timestamp", "severity", "source", "headline", "detail", "correlation_key"} <= set(payload[0].keys())
