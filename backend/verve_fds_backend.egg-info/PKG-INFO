@@ -1,0 +1,22 @@
+Metadata-Version: 2.4
+Name: verve-fds-backend
+Version: 0.1.0
+Summary: VERVE FDS Infra backend
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi<1.0.0,>=0.115.0
+Requires-Dist: uvicorn[standard]<1.0.0,>=0.30.0
+Requires-Dist: sqlalchemy<3.0.0,>=2.0.32
+Requires-Dist: psycopg[binary]<4.0.0,>=3.2.1
+Requires-Dist: pydantic-settings<3.0.0,>=2.4.0
+Requires-Dist: PyJWT<3.0.0,>=2.9.0
+Requires-Dist: redis<6.0.0,>=5.0.8
+Requires-Dist: python-dotenv<2.0.0,>=1.0.1
+Provides-Extra: dev
+Requires-Dist: pytest<9.0.0,>=8.3.2; extra == "dev"
+Requires-Dist: httpx<1.0.0,>=0.27.0; extra == "dev"
+
+# Backend
+
+FastAPI, SQLAlchemy, PostgreSQL, Redis 기반의 FDS 백엔드입니다.
+
